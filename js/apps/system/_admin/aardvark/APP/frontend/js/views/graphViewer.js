@@ -286,19 +286,30 @@
       if (!self.collectionColors) {
         self.collectionColors = {};
         var pos = 0;
-        var tmp = {};
+        var tmpNodes = {};
+        var tmpEdges = {};
 
-        _.each(this.graphData.modified.nodes, function (node) {
-          tmp[node.id] = undefined;
+        _.each(this.currentGraph.graph.nodes(), function (node) {
+          tmpNodes[node.id] = undefined;
         });
 
-        _.each(this.graphData.modified.edges, function (edge) {
-          tmp[edge.id] = undefined;
+        _.each(self.currentGraph.graph.edges(), function (edge) {
+          tmpEdges[edge.id] = undefined;
         });
 
-        _.each(tmp, function (node, key) {
-          self.collectionColors[key.split('/')[0]] = {color: self.colors.gv[pos]};
-          pos++;
+        _.each(tmpNodes, function (node, key) {
+          if (self.collectionColors[key.split('/')[0]] === undefined) {
+            self.collectionColors[key.split('/')[0]] = {color: self.colors.gv[pos]};
+            pos++;
+          }
+        });
+
+        pos = 0;
+        _.each(tmpEdges, function (edge, key) {
+          if (self.collectionColors[key.split('/')[0]] === undefined) {
+            self.collectionColors[key.split('/')[0]] = {color: self.colors.gv[pos]};
+            pos++;
+          }
         });
       }
     },
@@ -306,7 +317,6 @@
     switchNodeColorByCollection: function (boolean) {
       var self = this;
       self.buildCollectionColors();
-
       if (boolean) {
         self.currentGraph.graph.nodes().forEach(function (n) {
           n.color = self.collectionColors[n.id.split('/')[0]].color;
@@ -348,7 +358,7 @@
         self.nodeEdgesCount = {};
         var handledEdges = {};
 
-        _.each(this.graphData.modified.edges, function (edge) {
+        _.each(this.currentGraph.graph.edges(), function (edge) {
           if (handledEdges[edge.id] === undefined) {
             handledEdges[edge.id] = true;
 
@@ -384,13 +394,34 @@
     },
 
     switchEdgeType: function (edgeType) {
+      var data = {
+        nodes: this.currentGraph.graph.nodes(),
+        edges: this.currentGraph.graph.edges(),
+        settings: {}
+      };
+
       this.killCurrentGraph();
-      this.renderGraph(this.graphData.modified, null, false, null, null, edgeType);
+      this.renderGraph(data, null, false, null, null, edgeType);
     },
 
     switchLayout: function (layout) {
+      var data = {
+        nodes: this.currentGraph.graph.nodes(),
+        edges: this.currentGraph.graph.edges(),
+        settings: {}
+      };
+
       this.killCurrentGraph();
-      this.renderGraph(this.graphData.modified, null, false, layout);
+      this.renderGraph(data, null, false, layout);
+
+      if ($('#g_nodeColorByCollection').val() === 'true') {
+        this.switchNodeColorByCollection(true);
+      }
+      if ($('#g_edgeColorByCollection').val() === 'true') {
+        this.switchEdgeColorByCollection(true);
+      } else {
+        this.switchEdgeColorByCollection(false);
+      }
     },
 
     parseData: function (data, type) {
@@ -1679,12 +1710,6 @@
 
     renderGraph: function (graph, toFocus, aqlMode, layout, renderer, edgeType) {
       var self = this;
-
-      if (this.graphData === undefined) {
-        this.graphData = {};
-        this.graphData.modified = graph;
-      }
-
       this.graphSettings = graph.settings;
 
       var color = '#2ecc71';
@@ -1734,7 +1759,7 @@
       if (this.graphConfig) {
         if (this.graphConfig.layout) {
           if (!layout) {
-            self.layout = this.graphConfig.layout;
+            self.algorithm = this.graphConfig.layout;
           }
         }
 
@@ -1941,7 +1966,7 @@
             // validate edgeDefinitions
             var foundEdgeDefinitions = self.getEdgeDefinitionCollections(fromCollection, toCollection);
             self.addEdgeModal(foundEdgeDefinitions, self.contextState._from, self.contextState._to);
-            self.clearOldContextMenu(true);
+            self.clearOldContextMenu(false);
           } else {
             if (!self.dragging) {
               if (self.contextState.createEdge === true) {
@@ -2097,7 +2122,7 @@
         // allow draggin nodes
       } else if (self.algorithm === 'force') {
         // add buttons for start/stopping calculation
-        var style2 = 'color: rgb(64, 74, 83); cursor: pointer; position: absolute; right: 30px; bottom: 40px;';
+        var style2 = 'color: rgb(64, 74, 83); cursor: pointer; position: absolute; right: 30px; bottom: 40px; z-index: 9999;';
 
         if (self.aqlMode) {
           style2 = 'color: rgb(64, 74, 83); cursor: pointer; position: absolute; right: 30px; margin-top: -30px;';
@@ -2208,6 +2233,12 @@
         self.graphNotInitialized = false;
         self.tmpGraphArray = [];
       }
+
+      if (self.algorithm === 'force') {
+        $('#toggleForce').fadeIn('fast');
+      } else {
+        $('#toggleForce').fadeOut('fast');
+      }
     },
 
     reInitDragListener: function () {
@@ -2290,7 +2321,7 @@ $('#deleteNodes').remove();
           self.stopLayout();
 
           if (origin) {
-            this.currentGraph.refresh({ skipIndexation: true });
+            self.currentGraph.refresh({ skipIndexation: true });
             // self.cameraToNode(origin);
           }
         }, 500);

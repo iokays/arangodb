@@ -237,7 +237,7 @@ class LogicalCollection {
   // SECTION: Sharding
   int numberOfShards() const;
   bool allowUserKeys() const;
-  bool usesDefaultShardKeys() const;
+  virtual bool usesDefaultShardKeys() const;
   std::vector<std::string> const& shardKeys() const;
   std::shared_ptr<ShardMap> shardIds() const;
   void setShardMap(std::shared_ptr<ShardMap>& map);
@@ -266,7 +266,7 @@ class LogicalCollection {
   virtual int update(arangodb::velocypack::Slice const&, bool);
 
   /// @brief return the figures for a collection
-  std::shared_ptr<arangodb::velocypack::Builder> figures();
+  virtual std::shared_ptr<arangodb::velocypack::Builder> figures();
   
   /// @brief opens an existing collection
   void open(bool ignoreErrors);

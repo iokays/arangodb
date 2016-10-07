@@ -73,8 +73,8 @@
 #include "V8Server/v8-statistics.h"
 #include "V8Server/v8-voccursor.h"
 #include "V8Server/v8-vocindex.h"
-#include "VocBase/LogicalCollection.h"
 #include "VocBase/KeyGenerator.h"
+#include "VocBase/LogicalCollection.h"
 #include "VocBase/modes.h"
 #include "Wal/LogfileManager.h"
 
@@ -1651,12 +1651,17 @@ static void JS_ThrowCollectionNotLoaded(
   v8::HandleScope scope(isolate);
 
   if (args.Length() == 0) {
-    auto databaseFeature = application_features::ApplicationServer::getFeature<DatabaseFeature>("Database");
+    auto databaseFeature =
+        application_features::ApplicationServer::getFeature<DatabaseFeature>(
+            "Database");
     bool const value = databaseFeature->throwCollectionNotLoadedError();
     TRI_V8_RETURN(v8::Boolean::New(isolate, value));
   } else if (args.Length() == 1) {
-    auto databaseFeature = application_features::ApplicationServer::getFeature<DatabaseFeature>("Database");
-    databaseFeature->throwCollectionNotLoadedError(TRI_ObjectToBoolean(args[0]));
+    auto databaseFeature =
+        application_features::ApplicationServer::getFeature<DatabaseFeature>(
+            "Database");
+    databaseFeature->throwCollectionNotLoadedError(
+        TRI_ObjectToBoolean(args[0]));
   } else {
     TRI_V8_THROW_EXCEPTION_USAGE("THROW_COLLECTION_NOT_LOADED(<value>)");
   }
@@ -1823,8 +1828,8 @@ static void MapGetVocBase(v8::Local<v8::String> const name,
     v8::Handle<v8::Object> value =
         cacheObject->GetRealNamedProperty(cacheName)->ToObject();
 
-    collection =
-        TRI_UnwrapClass<arangodb::LogicalCollection>(value, WRP_VOCBASE_COL_TYPE);
+    collection = TRI_UnwrapClass<arangodb::LogicalCollection>(
+        value, WRP_VOCBASE_COL_TYPE);
 
     // check if the collection is from the same database
     if (collection != nullptr && collection->vocbase() == vocbase) {
@@ -1944,7 +1949,7 @@ static void JS_PathDatabase(v8::FunctionCallbackInfo<v8::Value> const& args) {
   if (vocbase == nullptr) {
     TRI_V8_THROW_EXCEPTION(TRI_ERROR_ARANGO_DATABASE_NOT_FOUND);
   }
-    
+
   StorageEngine* engine = EngineSelectorFeature::ENGINE;
 
   TRI_V8_RETURN_STD_STRING(engine->databasePath(vocbase));
@@ -2025,7 +2030,9 @@ static void JS_UseDatabase(v8::FunctionCallbackInfo<v8::Value> const& args) {
     TRI_V8_THROW_EXCEPTION(TRI_ERROR_FORBIDDEN);
   }
 
-  auto databaseFeature = application_features::ApplicationServer::getFeature<DatabaseFeature>("Database");
+  auto databaseFeature =
+      application_features::ApplicationServer::getFeature<DatabaseFeature>(
+          "Database");
   std::string const name = TRI_ObjectToString(args[0]);
 
   TRI_vocbase_t* vocbase = GetContextVocBase(isolate);
@@ -2158,7 +2165,9 @@ static void JS_Databases(v8::FunctionCallbackInfo<v8::Value> const& args) {
     return;
   }
 
-  auto databaseFeature = application_features::ApplicationServer::getFeature<DatabaseFeature>("Database");
+  auto databaseFeature =
+      application_features::ApplicationServer::getFeature<DatabaseFeature>(
+          "Database");
   std::vector<std::string> names;
 
   if (argc == 0) {
@@ -2166,7 +2175,8 @@ static void JS_Databases(v8::FunctionCallbackInfo<v8::Value> const& args) {
     names = databaseFeature->getDatabaseNames();
   } else {
     // return all databases for a specific user
-    names = databaseFeature->getDatabaseNamesForUser(TRI_ObjectToString(args[0]));
+    names =
+        databaseFeature->getDatabaseNamesForUser(TRI_ObjectToString(args[0]));
   }
 
   v8::Handle<v8::Array> result = v8::Array::New(isolate, (int)names.size());
@@ -2237,8 +2247,10 @@ static void CreateDatabaseCoordinator(
   // now wait for heartbeat thread to create the database object
   TRI_vocbase_t* vocbase = nullptr;
   int tries = 0;
-  
-  auto databaseFeature = application_features::ApplicationServer::getFeature<DatabaseFeature>("Database");
+
+  auto databaseFeature =
+      application_features::ApplicationServer::getFeature<DatabaseFeature>(
+          "Database");
 
   while (++tries <= 6000) {
     vocbase = databaseFeature->useDatabaseCoordinator(id);
@@ -2326,7 +2338,8 @@ static void JS_CreateDatabase(v8::FunctionCallbackInfo<v8::Value> const& args) {
 
   TRI_GET_GLOBALS();
   TRI_voc_tick_t id = 0;
-  // options for database (currently only allows setting "id" for testing purposes)
+  // options for database (currently only allows setting "id" for testing
+  // purposes)
   if (args.Length() > 1 && args[1]->IsObject()) {
     v8::Handle<v8::Object> options = args[1]->ToObject();
 
@@ -2339,7 +2352,9 @@ static void JS_CreateDatabase(v8::FunctionCallbackInfo<v8::Value> const& args) {
 
   std::string const name = TRI_ObjectToString(args[0]);
 
-  DatabaseFeature* databaseFeature = application_features::ApplicationServer::getFeature<DatabaseFeature>("Database");
+  DatabaseFeature* databaseFeature =
+      application_features::ApplicationServer::getFeature<DatabaseFeature>(
+          "Database");
   TRI_vocbase_t* database = nullptr;
   int res = databaseFeature->createDatabase(id, name, true, database);
 
@@ -2392,7 +2407,9 @@ static void DropDatabaseCoordinator(
   v8::HandleScope scope(isolate);
 
   // Arguments are already checked, there is exactly one argument
-  auto databaseFeature = application_features::ApplicationServer::getFeature<DatabaseFeature>("Database");
+  auto databaseFeature =
+      application_features::ApplicationServer::getFeature<DatabaseFeature>(
+          "Database");
   std::string const name = TRI_ObjectToString(args[0]);
   TRI_vocbase_t* vocbase = databaseFeature->useDatabaseCoordinator(name);
 
@@ -2465,7 +2482,9 @@ static void JS_DropDatabase(v8::FunctionCallbackInfo<v8::Value> const& args) {
 
   std::string const name = TRI_ObjectToString(args[0]);
 
-  DatabaseFeature* databaseFeature = application_features::ApplicationServer::getFeature<DatabaseFeature>("Database");
+  DatabaseFeature* databaseFeature =
+      application_features::ApplicationServer::getFeature<DatabaseFeature>(
+          "Database");
   int res = databaseFeature->dropDatabase(name, true, false, true);
 
   if (res != TRI_ERROR_NO_ERROR) {
@@ -2666,8 +2685,7 @@ void TRI_V8ReloadRouting(v8::Isolate* isolate) {
 
 void TRI_InitV8VocBridge(v8::Isolate* isolate, v8::Handle<v8::Context> context,
                          arangodb::aql::QueryRegistry* queryRegistry,
-                         TRI_vocbase_t* vocbase,
-                         size_t threadNumber) {
+                         TRI_vocbase_t* vocbase, size_t threadNumber) {
   v8::HandleScope scope(isolate);
 
   // check the isolate

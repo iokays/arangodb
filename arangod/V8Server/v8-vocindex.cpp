@@ -33,6 +33,7 @@
 #include "Indexes/EdgeIndex.h"
 #include "Indexes/Index.h"
 #include "Indexes/PrimaryIndex.h"
+#include "Utils/Events.h"
 #include "Utils/SingleCollectionTransaction.h"
 #include "Utils/V8TransactionContext.h"
 #include "V8/v8-conv.h"
@@ -448,40 +449,14 @@ static int EnhanceIndexJson(v8::FunctionCallbackInfo<v8::Value> const& args,
 /// @brief ensures an index, coordinator case
 ////////////////////////////////////////////////////////////////////////////////
 
-static void EnsureIndexCoordinator(
-    v8::FunctionCallbackInfo<v8::Value> const& args,
-    LogicalCollection const* collection, VPackSlice const slice, bool create) {
-  v8::Isolate* isolate = args.GetIsolate();
-  v8::HandleScope scope(isolate);
-
-  TRI_ASSERT(collection != nullptr);
+int EnsureIndexCoordinator(std::string const& databaseName,
+                           std::string const& cid,
+                           VPackSlice const slice, bool create,
+                           VPackBuilder& resultBuilder, std::string& errorMsg) {
   TRI_ASSERT(!slice.isNone());
-
-  std::string const databaseName(collection->dbName());
-  std::string const cid = collection->cid_as_string();
-  std::string const collectionName(collection->name());
-
-  VPackBuilder resultBuilder;
-  std::string errorMsg;
-  int res = ClusterInfo::instance()->ensureIndexCoordinator(
+  return ClusterInfo::instance()->ensureIndexCoordinator(
       databaseName, cid, slice, create, &arangodb::Index::Compare,
       resultBuilder, errorMsg, 360.0);
-
-  if (res != TRI_ERROR_NO_ERROR) {
-    TRI_V8_THROW_EXCEPTION_MESSAGE(res, errorMsg);
-  }
-
-  if (resultBuilder.slice().isNone()) {
-    if (!create) {
-      // did not find a suitable index
-      TRI_V8_RETURN_NULL();
-    }
-
-    TRI_V8_THROW_EXCEPTION_MEMORY();
-  }
-
-  v8::Handle<v8::Value> ret = IndexRep(isolate, collectionName, resultBuilder.slice());
-  TRI_V8_RETURN(ret);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -621,9 +596,34 @@ static void EnsureIndex(v8::FunctionCallbackInfo<v8::Value> const& args,
   }
 
   TRI_ASSERT(!slice.isNone());
+  events::CreateIndex(collection->name(), slice);
+
   // ensure an index, coordinator case
   if (ServerState::instance()->isCoordinator()) {
-    EnsureIndexCoordinator(args, collection, slice, create);
+    VPackBuilder resultBuilder;
+    std::string errorMsg;
+#ifdef USE_ENTERPRISE
+    int res = EnsureIndexCoordinatorEnterprise(collection, slice, create,
+                                               resultBuilder, errorMsg);
+#else
+    std::string const databaseName(collection->dbName());
+    std::string const cid = collection->cid_as_string();
+    int res = EnsureIndexCoordinator(databaseName, cid, slice, create,
+                                     resultBuilder, errorMsg);
+#endif
+    if (res != TRI_ERROR_NO_ERROR) {
+      TRI_V8_THROW_EXCEPTION_MESSAGE(res, errorMsg);
+    }
+    if (resultBuilder.slice().isNone()) {
+      if (!create) {
+        // did not find a suitable index
+        TRI_V8_RETURN_NULL();
+      }
+
+      TRI_V8_THROW_EXCEPTION_MEMORY();
+    }
+    v8::Handle<v8::Value> ret = IndexRep(isolate, collection->name(), resultBuilder.slice());
+    TRI_V8_RETURN(ret);
   } else {
     EnsureIndexLocal(args, collection, slice, create);
   }
@@ -731,54 +731,15 @@ static void JS_LookupIndexVocbaseCol(
 /// @brief drops an index, coordinator case
 ////////////////////////////////////////////////////////////////////////////////
 
-static void DropIndexCoordinator(
-    v8::FunctionCallbackInfo<v8::Value> const& args,
-    arangodb::LogicalCollection const* collection, v8::Handle<v8::Value> const val) {
-  v8::Isolate* isolate = args.GetIsolate();
-  v8::HandleScope scope(isolate);
-
-  std::string collectionName;
-  TRI_idx_iid_t iid = 0;
-
-  // extract the index identifier from a string
-  if (val->IsString() || val->IsStringObject() || val->IsNumber()) {
-    if (!IsIndexHandle(val, collectionName, iid)) {
-      TRI_V8_THROW_EXCEPTION(TRI_ERROR_ARANGO_INDEX_HANDLE_BAD);
-    }
-  }
-
-  // extract the index identifier from an object
-  else if (val->IsObject()) {
-    TRI_GET_GLOBALS();
-
-    v8::Handle<v8::Object> obj = val->ToObject();
-    TRI_GET_GLOBAL_STRING(IdKey);
-    v8::Handle<v8::Value> iidVal = obj->Get(IdKey);
-
-    if (!IsIndexHandle(iidVal, collectionName, iid)) {
-      TRI_V8_THROW_EXCEPTION(TRI_ERROR_ARANGO_INDEX_HANDLE_BAD);
-    }
-  }
-
-  if (!collectionName.empty()) {
-    CollectionNameResolver resolver(collection->vocbase());
-
-    if (!EqualCollection(&resolver, collectionName, collection)) {
-      TRI_V8_THROW_EXCEPTION(TRI_ERROR_ARANGO_CROSS_COLLECTION_REQUEST);
-    }
-  }
-
-  std::string const databaseName(collection->dbName());
-  std::string const cid = collection->cid_as_string();
+int DropIndexCoordinator(
+    std::string const& databaseName,
+    std::string const& cid,
+    TRI_idx_iid_t const iid) {
   std::string errorMsg;
 
-  int res = ClusterInfo::instance()->dropIndexCoordinator(databaseName, cid,
-                                                          iid, errorMsg, 0.0);
+  return ClusterInfo::instance()->dropIndexCoordinator(databaseName, cid,
+                                                       iid, errorMsg, 0.0);
 
-  if (res == TRI_ERROR_NO_ERROR) {
-    TRI_V8_RETURN_TRUE();
-  }
-  TRI_V8_RETURN_FALSE();
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -804,8 +765,49 @@ static void JS_DropIndexVocbaseCol(
   }
 
   if (ServerState::instance()->isCoordinator()) {
-    DropIndexCoordinator(args, collection, args[0]);
-    return;
+    std::string collectionName;
+    TRI_idx_iid_t iid = 0;
+    v8::Handle<v8::Value> const val = args[0];
+
+    // extract the index identifier from a string
+    if (val->IsString() || val->IsStringObject() || val->IsNumber()) {
+      if (!IsIndexHandle(val, collectionName, iid)) {
+        TRI_V8_THROW_EXCEPTION(TRI_ERROR_ARANGO_INDEX_HANDLE_BAD);
+      }
+    }
+
+    // extract the index identifier from an object
+    else if (val->IsObject()) {
+      TRI_GET_GLOBALS();
+
+      v8::Handle<v8::Object> obj = val->ToObject();
+      TRI_GET_GLOBAL_STRING(IdKey);
+      v8::Handle<v8::Value> iidVal = obj->Get(IdKey);
+
+      if (!IsIndexHandle(iidVal, collectionName, iid)) {
+        TRI_V8_THROW_EXCEPTION(TRI_ERROR_ARANGO_INDEX_HANDLE_BAD);
+      }
+    }
+
+    if (!collectionName.empty()) {
+      CollectionNameResolver resolver(collection->vocbase());
+
+      if (!EqualCollection(&resolver, collectionName, collection)) {
+        TRI_V8_THROW_EXCEPTION(TRI_ERROR_ARANGO_CROSS_COLLECTION_REQUEST);
+      }
+    }
+
+#ifdef USE_ENTERPRISE
+    int res = DropIndexCoordinatorEnterprise(collection, iid);
+#else
+    std::string const databaseName(collection->dbName());
+    std::string const cid = collection->cid_as_string();
+    int res = DropIndexCoordinator(databaseName, cid, iid);
+#endif
+    if (res == TRI_ERROR_NO_ERROR) {
+      TRI_V8_RETURN_TRUE();
+    }
+    TRI_V8_RETURN_FALSE();
   }
   
   READ_LOCKER(readLocker, collection->vocbase()->_inventoryLock);

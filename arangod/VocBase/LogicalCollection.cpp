@@ -49,6 +49,7 @@
 #include "Utils/CollectionNameResolver.h"
 #include "Utils/CollectionReadLocker.h"
 #include "Utils/CollectionWriteLocker.h"
+#include "Utils/Events.h"
 #include "Utils/SingleCollectionTransaction.h"
 #include "Utils/StandaloneTransactionContext.h"
 #include "VocBase/CollectionRevisionsCache.h"
@@ -1573,6 +1574,7 @@ bool LogicalCollection::dropIndex(TRI_idx_iid_t iid, bool writeMarker) {
   TRI_ASSERT(!ServerState::instance()->isCoordinator());
   if (iid == 0) {
     // invalid index id or primary index
+    events::DropIndex("", std::to_string(iid), TRI_ERROR_NO_ERROR);
     return true;
   }
 
@@ -1581,6 +1583,7 @@ bool LogicalCollection::dropIndex(TRI_idx_iid_t iid, bool writeMarker) {
         _vocbase, name());
     if (!removeIndex(iid)) {
       // We tried to remove an index that does not exist
+      events::DropIndex("", std::to_string(iid), TRI_ERROR_ARANGO_INDEX_NOT_FOUND);
       return false;
     }
   }
@@ -1609,6 +1612,7 @@ bool LogicalCollection::dropIndex(TRI_idx_iid_t iid, bool writeMarker) {
         THROW_ARANGO_EXCEPTION(slotInfo.errorCode);
       }
 
+      events::DropIndex("", std::to_string(iid), TRI_ERROR_NO_ERROR);
       return true;
     } catch (basics::Exception const& ex) {
       res = ex.code();
@@ -1617,6 +1621,7 @@ bool LogicalCollection::dropIndex(TRI_idx_iid_t iid, bool writeMarker) {
     }
 
     LOG(WARN) << "could not save index drop marker in log: " << TRI_errno_string(res);
+    events::DropIndex("", std::to_string(iid), res);
     // TODO: what to do here?
   }
 
