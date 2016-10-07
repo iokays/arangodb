@@ -381,8 +381,8 @@ static void JS_ChecksumCollection(
   uint64_t hash = 0;
         
   ManagedMultiDocumentResult mmdr;
-  trx.invokeOnAllElements(col->name(), [&hash, &withData, &withRevisions, &trx, &collection, &mmdr](IndexElement const* element) {
-    collection->readRevision(&trx, mmdr, element->revisionId());
+  trx.invokeOnAllElements(col->name(), [&hash, &withData, &withRevisions, &trx, &collection, &mmdr](SimpleIndexElement const& element) {
+    collection->readRevision(&trx, mmdr, element.revisionId());
     uint8_t const* vpack = mmdr.back();
     VPackSlice const slice(vpack);
 

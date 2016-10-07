@@ -70,7 +70,7 @@ bool SingleServerEdgeCursor::next(std::vector<VPackSlice>& result,
   if (_cachePos < _cache.size()) {
     LogicalCollection* collection = _cursors[_currentCursor][_currentSubCursor]->collection();
     ManagedMultiDocumentResult mmdr;
-    TRI_voc_rid_t revisionId = _cache[_cachePos]->revisionId();
+    TRI_voc_rid_t revisionId = _cache[_cachePos].revisionId();
     if (collection->readRevision(_trx, mmdr, revisionId)) {
       uint8_t const* vpack = mmdr.back();
       result.emplace_back(vpack);
@@ -117,7 +117,7 @@ bool SingleServerEdgeCursor::next(std::vector<VPackSlice>& result,
   ManagedMultiDocumentResult mmdr;
   TRI_ASSERT(_cachePos < _cache.size());
   LogicalCollection* collection = cursor->collection();
-  TRI_voc_rid_t revisionId = _cache[_cachePos]->revisionId();
+  TRI_voc_rid_t revisionId = _cache[_cachePos].revisionId();
   if (collection->readRevision(_trx, mmdr, revisionId)) {
     uint8_t const* vpack = mmdr.back();
     result.emplace_back(vpack);
@@ -142,8 +142,8 @@ bool SingleServerEdgeCursor::readAll(std::unordered_set<VPackSlice>& result,
       // NOTE: We cannot clear the cache,
       // because the cursor expect's it to be filled.
       cursor->getMoreMptr(_cache);
-      for (auto const& mptr : _cache) {
-        TRI_voc_rid_t revisionId = mptr->revisionId();
+      for (auto const& element : _cache) {
+        TRI_voc_rid_t revisionId = element.revisionId();
         if (collection->readRevision(_trx, mmdr, revisionId)) {
           uint8_t const* vpack = mmdr.back();
           result.emplace(vpack);

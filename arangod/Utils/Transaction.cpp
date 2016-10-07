@@ -580,7 +580,12 @@ Transaction::~Transaction() {
   } else {
     if (getStatus() == TRI_TRANSACTION_RUNNING) {
       // auto abort a running transaction
-      this->abort();
+      try {
+        this->abort();
+        TRI_ASSERT(getStatus() != TRI_TRANSACTION_RUNNING);
+      } catch (...) {
+        // must never throw because we are in a dtor
+      }
     }
 
     // free the data associated with the transaction
@@ -1168,9 +1173,7 @@ int Transaction::commit() {
     return TRI_ERROR_NO_ERROR;
   }
 
-  int res = TRI_CommitTransaction(_trx, _nestingLevel);
-
-  return res;
+  return TRI_CommitTransaction(this, _trx, _nestingLevel);
 }
   
 ////////////////////////////////////////////////////////////////////////////////
@@ -1191,9 +1194,7 @@ int Transaction::abort() {
     return TRI_ERROR_NO_ERROR;
   }
 
-  int res = TRI_AbortTransaction(_trx, _nestingLevel);
-
-  return res;
+  return TRI_AbortTransaction(this, _trx, _nestingLevel);
 }
   
 ////////////////////////////////////////////////////////////////////////////////
@@ -1280,13 +1281,13 @@ OperationResult Transaction::anyLocal(std::string const& collectionName,
                 {}, skip, limit, 1000, false);
 
   LogicalCollection* collection = cursor->collection();
-  std::vector<IndexElement*> result;
+  std::vector<IndexLookupResult> result;
   ManagedMultiDocumentResult mmdr; // TODO
   while (cursor->hasMore()) {
     result.clear();
     cursor->getMoreMptr(result);
-    for (auto const& mptr : result) {
-      TRI_voc_rid_t revisionId = mptr->revisionId();
+    for (auto const& element : result) {
+      TRI_voc_rid_t revisionId = element.revisionId();
       if (collection->readRevision(this, mmdr, revisionId)) {
         uint8_t const* vpack = mmdr.back();
         resultBuilder.add(VPackSlice(vpack));
@@ -1393,7 +1394,7 @@ Transaction::IndexHandle Transaction::edgeIndexHandle(std::string const& collect
 //////////////////////////////////////////////////////////////////////////////
 
 void Transaction::invokeOnAllElements(std::string const& collectionName,
-                                      std::function<bool(IndexElement const*)> callback) {
+                                      std::function<bool(SimpleIndexElement const&)> callback) {
   TRI_ASSERT(getStatus() == TRI_TRANSACTION_RUNNING);
   if (ServerState::isCoordinator(_serverRole)) {
     THROW_ARANGO_EXCEPTION(TRI_ERROR_NOT_IMPLEMENTED);
@@ -2618,13 +2619,13 @@ OperationResult Transaction::allLocal(std::string const& collectionName,
   }
 
   LogicalCollection* collection = cursor->collection();
-  std::vector<IndexElement*> result;
+  std::vector<IndexLookupResult> result;
   result.reserve(1000);
   ManagedMultiDocumentResult mmdr; // TODO
   while (cursor->hasMore()) {
     cursor->getMoreMptr(result, 1000);
-    for (auto const& mptr : result) {
-      TRI_voc_rid_t revisionId = mptr->revisionId();
+    for (auto const& element : result) {
+      TRI_voc_rid_t revisionId = element.revisionId();
       if (collection->readRevision(this, mmdr, revisionId)) {
         uint8_t const* vpack = mmdr.back();
         resultBuilder.addExternal(vpack);
@@ -2699,8 +2700,8 @@ OperationResult Transaction::truncateLocal(std::string const& collectionName,
   TRI_voc_tick_t resultMarkerTick = 0;
   ManagedMultiDocumentResult mmdr; // TODO
 
-  auto callback = [&](IndexElement const* element) {
-    TRI_voc_rid_t revisionId = element->revisionId();
+  auto callback = [&](SimpleIndexElement const& element) {
+    TRI_voc_rid_t revisionId = element.revisionId();
     if (collection->readRevision(this, mmdr, revisionId)) {
       uint8_t const* vpack = mmdr.back();
       int res =
@@ -3048,9 +3049,6 @@ OperationCursor* Transaction::indexScanForCondition(
     return new OperationCursor(TRI_ERROR_NO_ERROR);
   }
 
-  // data that we pass to the iterator
-  IndexIteratorContext ctxt(_vocbase, resolver(), _serverRole);
- 
   auto idx = indexId.getIndex();
   if (nullptr == idx) {
     THROW_ARANGO_EXCEPTION_MESSAGE(TRI_ERROR_BAD_PARAMETER,
@@ -3058,7 +3056,7 @@ OperationCursor* Transaction::indexScanForCondition(
   }
 
   // Now create the Iterator
-  std::unique_ptr<IndexIterator> iterator(idx->iteratorForCondition(this, &ctxt, condition, var, reverse));
+  std::unique_ptr<IndexIterator> iterator(idx->iteratorForCondition(this, condition, var, reverse));
 
   if (iterator == nullptr) {
     // We could not create an ITERATOR and it did not throw an error itself
@@ -3143,8 +3141,7 @@ std::unique_ptr<OperationCursor> Transaction::indexScan(
       // idx->expandInSearchValues(search, expander);
 
       // Now collect the Iterator
-      IndexIteratorContext ctxt(_vocbase, resolver(), _serverRole);
-      iterator.reset(idx->iteratorForSlice(this, &ctxt, search, reverse));
+      iterator.reset(idx->iteratorForSlice(this, search, reverse));
     }
   }
   if (iterator == nullptr) {
@@ -3300,7 +3297,7 @@ int Transaction::unlock(TRI_transaction_collection_t* trxCollection,
   
 void Transaction::addChunk(RevisionCacheChunk* chunk) {
   TRI_ASSERT(chunk != nullptr);
-  _transactionContextPtr->addChunk(chunk);
+  _transactionContext->addChunk(chunk);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -3537,6 +3534,7 @@ void Transaction::freeTransaction() {
   TRI_ASSERT(!isEmbeddedTransaction());
 
   if (_trx != nullptr) {
+    TRI_ASSERT(getStatus() != TRI_TRANSACTION_RUNNING);
     auto id = _trx->_id;
     bool hasFailedOperations = _trx->hasFailedOperations();
     delete _trx;
@@ -3546,6 +3544,37 @@ void Transaction::freeTransaction() {
     _transactionContext->storeTransactionResult(id, hasFailedOperations);
     _transactionContext->unregisterTransaction();
   }
+}
+  
+bool Transaction::isCluster() {
+  return arangodb::ServerState::instance()->isRunningInCluster(_serverRole);
+}
+
+int Transaction::resolveId(char const* handle, size_t length,
+                           TRI_voc_cid_t& cid,
+                           char const*& key,
+                           size_t& outLength) {
+  char const* p = static_cast<char const*>(memchr(handle, TRI_DOCUMENT_HANDLE_SEPARATOR_CHR, length));
+
+  if (p == nullptr || *p == '\0') {
+    return TRI_ERROR_ARANGO_DOCUMENT_HANDLE_BAD;
+  }
+
+  if (*handle >= '0' && *handle <= '9') {
+    cid = arangodb::basics::StringUtils::uint64(handle, p - handle);
+  } else {
+    std::string const name(handle, p - handle);
+    cid = resolver()->getCollectionIdCluster(name);
+  }
+
+  if (cid == 0) {
+    return TRI_ERROR_ARANGO_COLLECTION_NOT_FOUND;
+  }
+
+  key = p + 1;
+  outLength = length - (key - handle);
+
+  return TRI_ERROR_NO_ERROR;
 }
 
 //////////////////////////////////////////////////////////////////////////////

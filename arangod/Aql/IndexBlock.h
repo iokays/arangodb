@@ -109,7 +109,7 @@ class IndexBlock : public ExecutionBlock {
   Collection const* _collection;
 
   /// @brief document result
-  std::vector<IndexElement*> _result;
+  std::vector<IndexLookupResult> _result;
   
   /// @brief document buffer
   std::vector<arangodb::velocypack::Slice> _documents;

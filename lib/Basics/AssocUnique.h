@@ -498,6 +498,35 @@ class AssocUnique {
 
     return b._table[i];
   }
+  
+  Element* findByKeyRef(UserData* userData, Key const* key) const {
+    uint64_t hash = _hashKey(userData, key);
+    uint64_t i = hash;
+    uint64_t bucketId = i & _bucketsMask;
+    Bucket const& b = _buckets[static_cast<size_t>(bucketId)];
+
+    uint64_t const n = b._nrAlloc;
+    i = i % n;
+    uint64_t k = i;
+
+    for (; i < n && b._table[i] &&
+               !_isEqualKeyElement(userData, key, hash, b._table[i]);
+         ++i)
+      ;
+    if (i == n) {
+      for (i = 0; i < k && b._table[i] &&
+                      !_isEqualKeyElement(userData, key, hash, b._table[i]);
+           ++i)
+        ;
+    }
+
+    // ...........................................................................
+    // return whatever we found, this is nullptr if the thing was not found
+    // and otherwise a valid pointer
+    // ...........................................................................
+
+    return &b._table[i];
+  }
 
   //////////////////////////////////////////////////////////////////////////////
   /// @brief finds an element given a key, returns a default-constructed Element
@@ -901,12 +930,7 @@ class AssocUnique {
           ++i;
           continue;
         }
-        // intentionally don't increment i
         Element old = b._table[i];
-        if (!old) {
-          ++i;
-          continue;
-        }
         if (!callback(b._table[i])) {
           return;
         }

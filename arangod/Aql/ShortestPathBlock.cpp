@@ -70,7 +70,7 @@ struct ConstDistanceExpanderLocal {
   bool _isReverse;
 
   /// @brief Local cursor vector
-  std::vector<IndexElement*> _cursor;
+  std::vector<IndexLookupResult> _cursor;
 
  public:
   ConstDistanceExpanderLocal(ShortestPathBlock const* block,
@@ -97,8 +97,8 @@ struct ConstDistanceExpanderLocal {
       ManagedMultiDocumentResult mmdr;
       while (edgeCursor->hasMore()) {
         edgeCursor->getMoreMptr(_cursor, UINT64_MAX);
-        for (auto const& mptr : _cursor) {
-          TRI_voc_rid_t revisionId = mptr->revisionId();
+        for (auto const& element : _cursor) {
+          TRI_voc_rid_t revisionId = element.revisionId();
           if (collection->readRevision(_block->transaction(), mmdr, revisionId)) {
             uint8_t const* vpack = mmdr.back();
             VPackSlice edge(vpack);
@@ -220,7 +220,7 @@ struct EdgeWeightExpanderLocal {
 
   void operator()(VPackSlice const& source,
                   std::vector<ArangoDBPathFinder::Step*>& result) {
-    std::vector<IndexElement*> cursor;
+    std::vector<IndexLookupResult> cursor;
     std::unique_ptr<arangodb::OperationCursor> edgeCursor;
     std::unordered_map<VPackSlice, size_t> candidates;
     for (auto const& edgeCollection : _block->_collectionInfos) {
@@ -242,8 +242,8 @@ struct EdgeWeightExpanderLocal {
       LogicalCollection* collection = edgeCursor->collection();
       while (edgeCursor->hasMore()) {
         edgeCursor->getMoreMptr(cursor, UINT64_MAX);
-        for (auto const& mptr : cursor) {
-          TRI_voc_rid_t revisionId = mptr->revisionId();
+        for (auto const& element : cursor) {
+          TRI_voc_rid_t revisionId = element.revisionId();
           if (collection->readRevision(_block->transaction(), mmdr, revisionId)) {
             uint8_t const* vpack = mmdr.back();
             VPackSlice edge(vpack);

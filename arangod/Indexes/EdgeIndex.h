@@ -36,8 +36,8 @@
 
 namespace arangodb {
   
-typedef arangodb::basics::AssocMulti<arangodb::velocypack::Slice, IndexElement*,
-                                     uint32_t, true> TRI_EdgeIndexHash_t;
+typedef arangodb::basics::AssocMulti<arangodb::velocypack::Slice, SimpleIndexElement,
+                                     uint32_t, false> TRI_EdgeIndexHash_t;
 
 
 class EdgeIndexIterator final : public IndexIterator {
@@ -51,7 +51,7 @@ class EdgeIndexIterator final : public IndexIterator {
         _iterator(_keys->slice()),
         _posInBuffer(0),
         _batchSize(1000),
-        _lastElement(nullptr) {
+        _lastElement() {
         
     keys.release(); // now we have ownership for _keys
   }
@@ -60,9 +60,9 @@ class EdgeIndexIterator final : public IndexIterator {
   
   char const* typeName() const override { return "edge-index-iterator"; }
 
-  IndexElement* next() override;
+  IndexLookupResult next() override;
 
-  void nextBabies(std::vector<IndexElement*>&, size_t) override;
+  void nextBabies(std::vector<IndexLookupResult>&, size_t) override;
 
   void reset() override;
 
@@ -70,10 +70,10 @@ class EdgeIndexIterator final : public IndexIterator {
   TRI_EdgeIndexHash_t const* _index;
   std::unique_ptr<arangodb::velocypack::Builder> _keys;
   arangodb::velocypack::ArrayIterator _iterator;
-  std::vector<IndexElement*> _buffer;
+  std::vector<SimpleIndexElement> _buffer;
   size_t _posInBuffer;
   size_t _batchSize;
-  IndexElement* _lastElement;
+  SimpleIndexElement _lastElement;
 };
 
 class AnyDirectionEdgeIndexIterator final : public IndexIterator {
@@ -94,9 +94,9 @@ class AnyDirectionEdgeIndexIterator final : public IndexIterator {
   
   char const* typeName() const override { return "any-edge-index-iterator"; }
 
-  IndexElement* next() override;
+  IndexLookupResult next() override;
 
-  void nextBabies(std::vector<IndexElement*>&, size_t) override;
+  void nextBabies(std::vector<IndexLookupResult>&, size_t) override;
 
   void reset() override;
 
@@ -173,7 +173,6 @@ class EdgeIndex final : public Index {
                                double&) const override;
 
   IndexIterator* iteratorForCondition(arangodb::Transaction*,
-                                      IndexIteratorContext*,
                                       arangodb::aql::AstNode const*,
                                       arangodb::aql::Variable const*,
                                       bool) const override;
@@ -206,27 +205,27 @@ class EdgeIndex final : public Index {
   ///        a valid memory region.
   ////////////////////////////////////////////////////////////////////////////////
 
-  IndexIterator* iteratorForSlice(arangodb::Transaction*, IndexIteratorContext*,
+  IndexIterator* iteratorForSlice(arangodb::Transaction*, 
                                   arangodb::velocypack::Slice const,
                                   bool) const override;
 
  private:
   /// @brief create the iterator
   IndexIterator* createEqIterator(
-      arangodb::Transaction*, IndexIteratorContext*,
+      arangodb::Transaction*, 
       arangodb::aql::AstNode const*,
       arangodb::aql::AstNode const*) const;
   
   IndexIterator* createInIterator(
-      arangodb::Transaction*, IndexIteratorContext*,
+      arangodb::Transaction*, 
       arangodb::aql::AstNode const*,
       arangodb::aql::AstNode const*) const;
 
   /// @brief add a single value node to the iterator's keys
   void handleValNode(VPackBuilder* keys, arangodb::aql::AstNode const* valNode) const;
 
-  IndexElement* buildFromElement(TRI_voc_rid_t, arangodb::velocypack::Slice const& doc) const;
-  IndexElement* buildToElement(TRI_voc_rid_t, arangodb::velocypack::Slice const& doc) const;
+  SimpleIndexElement buildFromElement(TRI_voc_rid_t, arangodb::velocypack::Slice const& doc) const;
+  SimpleIndexElement buildToElement(TRI_voc_rid_t, arangodb::velocypack::Slice const& doc) const;
 
  private:
   /// @brief the hash table for _from

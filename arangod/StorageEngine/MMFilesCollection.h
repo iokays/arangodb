@@ -54,17 +54,18 @@ class MMFilesCollection final : public PhysicalCollection {
     uint64_t _documents;
     int64_t _initialCount;
 
-    explicit OpenIteratorState(LogicalCollection* collection) 
+    OpenIteratorState(LogicalCollection* collection, arangodb::Transaction* trx) 
         : _collection(collection),
           _tid(0),
           _fid(0),
           _stats(),
           _dfi(nullptr),
-          _trx(nullptr),
+          _trx(trx),
           _deletions(0),
           _documents(0),
           _initialCount(-1) {
       TRI_ASSERT(collection != nullptr);
+      TRI_ASSERT(trx != nullptr);
     }
 
     ~OpenIteratorState() {

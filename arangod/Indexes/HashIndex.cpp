@@ -275,12 +275,12 @@ HashIndexIterator::HashIndexIterator(LogicalCollection* collection,
     _index->lookup(_trx, _lookups.lookup(), _buffer);
 }
 
-IndexElement* HashIndexIterator::next() {
+IndexLookupResult HashIndexIterator::next() {
   while (true) {
     if (_posInBuffer >= _buffer.size()) {
       if (!_lookups.hasAndGetNext()) {
         // we're at the end of the lookup values
-        return nullptr;
+        return IndexLookupResult();
       }
 
       // We have to refill the buffer
@@ -292,12 +292,12 @@ IndexElement* HashIndexIterator::next() {
 
     if (!_buffer.empty()) {
       // found something
-      return _buffer.at(_posInBuffer++);
+      return IndexLookupResult(_buffer.at(_posInBuffer++)->revisionId());
     }
   }
 }
 
-void HashIndexIterator::nextBabies(std::vector<IndexElement*>& result, size_t atMost) {
+void HashIndexIterator::nextBabies(std::vector<IndexLookupResult>& result, size_t atMost) {
   result.clear();
   
   if (atMost == 0) {
@@ -328,7 +328,7 @@ void HashIndexIterator::nextBabies(std::vector<IndexElement*>& result, size_t at
       }
 
       for (size_t i = _posInBuffer; i < atMost + _posInBuffer; ++i) {
-        result.emplace_back(_buffer.at(i));
+        result.emplace_back(_buffer.at(i)->revisionId());
       }
       _posInBuffer += atMost;
       return;
@@ -350,12 +350,12 @@ HashIndexIteratorVPack::~HashIndexIteratorVPack() {
   }
 }
 
-IndexElement* HashIndexIteratorVPack::next() {
+IndexLookupResult HashIndexIteratorVPack::next() {
   while (true) {
     if (_posInBuffer >= _buffer.size()) {
       if (!_iterator.valid()) {
         // we're at the end of the lookup values
-        return nullptr;
+        return IndexLookupResult();
       }
 
       // We have to refill the buffer
@@ -373,7 +373,7 @@ IndexElement* HashIndexIteratorVPack::next() {
 
     if (!_buffer.empty()) {
       // found something
-      return _buffer.at(_posInBuffer++);
+      return IndexLookupResult(_buffer.at(_posInBuffer++)->revisionId());
     }
   }
 }
@@ -969,7 +969,7 @@ bool HashIndex::supportsFilterCondition(
 ////////////////////////////////////////////////////////////////////////////////
 
 IndexIterator* HashIndex::iteratorForCondition(
-    arangodb::Transaction* trx, IndexIteratorContext*,
+    arangodb::Transaction* trx,
     arangodb::aql::AstNode const* node,
     arangodb::aql::Variable const* reference, bool) const {
   TRI_IF_FAILURE("HashIndex::noIterator")  {
@@ -983,7 +983,6 @@ IndexIterator* HashIndex::iteratorForCondition(
 ////////////////////////////////////////////////////////////////////////////////
 
 IndexIterator* HashIndex::iteratorForSlice(arangodb::Transaction* trx,
-                                           IndexIteratorContext*,
                                            VPackSlice const searchValues,
                                            bool) const {
   if (!searchValues.isArray()) {

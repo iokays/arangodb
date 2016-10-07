@@ -28,6 +28,7 @@
 #include "Basics/StaticStrings.h"
 #include "Basics/fasthash.h"
 #include "Basics/hashes.h"
+#include "Indexes/IndexLookupContext.h"
 #include "Indexes/SimpleAttributeEqualityMatcher.h"
 #include "Utils/CollectionNameResolver.h"
 #include "Utils/Transaction.h"
@@ -54,73 +55,68 @@ static std::vector<std::vector<arangodb::basics::AttributeName>> const IndexAttr
 ////////////////////////////////////////////////////////////////////////////////
 
 static uint64_t HashElementKey(void*, VPackSlice const* key) {
-  // TODO: Can we unify all HashElementKey functions for VPack?
   TRI_ASSERT(key != nullptr);
-  if (!key->isString()) {
-    // Illegal edge entry, key has to be string.
-    TRI_ASSERT(false);
-    return hashSeed;
-  }
   // we can get away with the fast hash function here, as edge
   // index values are restricted to strings
-  return key->hashString(hashSeed);
+  return SimpleIndexElement::hash(*key);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 /// @brief hashes an edge
 ////////////////////////////////////////////////////////////////////////////////
 
-static uint64_t HashElementEdge(void* userData, IndexElement const* element, bool byKey) {
-  TRI_ASSERT(element != nullptr);
-
+static uint64_t HashElementEdge(void*, SimpleIndexElement const& element, bool byKey) {
   if (!byKey) {
-    TRI_voc_rid_t revisionId = element->revisionId();
+    TRI_voc_rid_t revisionId = element.revisionId();
     return fasthash64(&revisionId, sizeof(revisionId), 0x56781234);
   }
 
-  // Is identical to HashElementKey
-  VPackSlice tmp = element->slice(0);
-  return HashElementKey(userData, &tmp);
+  return element.hash();
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 /// @brief checks if key and element match
 ////////////////////////////////////////////////////////////////////////////////
 
-static bool IsEqualKeyEdge(void*, VPackSlice const* left, IndexElement const* right) {
+static bool IsEqualKeyEdge(void* userData, VPackSlice const* left, SimpleIndexElement const& right) {
   TRI_ASSERT(left != nullptr);
-  TRI_ASSERT(right != nullptr);
-
-  // left is a key
-  // right is an element, that is a master pointer
-  VPackSlice tmp = right->slice(0);
-  TRI_ASSERT(tmp.isString());
-  return left->equals(tmp);
-}
-
-////////////////////////////////////////////////////////////////////////////////
-/// @brief checks for elements are equal
-////////////////////////////////////////////////////////////////////////////////
-
-static bool IsEqualElementEdge(void*, IndexElement const* left, IndexElement const* right) {
-  return left->revisionId() == right->revisionId();
-}
-
-////////////////////////////////////////////////////////////////////////////////
-/// @brief checks for elements are equal
-////////////////////////////////////////////////////////////////////////////////
-
-static bool IsEqualElementEdgeByKey(void*, IndexElement const* left, IndexElement const* right) {
-  TRI_ASSERT(left != nullptr);
-  TRI_ASSERT(right != nullptr);
-
-  VPackSlice lSlice = left->slice(0);
-  VPackSlice rSlice = right->slice(0);
+  IndexLookupContext* context = static_cast<IndexLookupContext*>(userData);
+  TRI_ASSERT(context != nullptr);
   
-  TRI_ASSERT(rSlice.isString());
-  TRI_ASSERT(lSlice.isString());
+  try {
+    VPackSlice tmp = right.slice(context);
+    TRI_ASSERT(tmp.isString());
+    return left->equals(tmp);
+  } catch (...) {
+    return false;
+  }
+}
 
-  return lSlice.equals(rSlice);
+////////////////////////////////////////////////////////////////////////////////
+/// @brief checks for elements are equal
+////////////////////////////////////////////////////////////////////////////////
+
+static bool IsEqualElementEdge(void*, SimpleIndexElement const& left, SimpleIndexElement const& right) {
+  return left.revisionId() == right.revisionId();
+}
+
+////////////////////////////////////////////////////////////////////////////////
+/// @brief checks for elements are equal
+////////////////////////////////////////////////////////////////////////////////
+
+static bool IsEqualElementEdgeByKey(void* userData, SimpleIndexElement const& left, SimpleIndexElement const& right) {
+  IndexLookupContext* context = static_cast<IndexLookupContext*>(userData);
+  try {
+    VPackSlice lSlice = left.slice(context);
+    VPackSlice rSlice = right.slice(context);
+  
+    TRI_ASSERT(rSlice.isString());
+    TRI_ASSERT(lSlice.isString());
+
+    return lSlice.equals(rSlice);
+  } catch (...) {
+    return false;
+  }
 }
 
 EdgeIndexIterator::~EdgeIndexIterator() {
@@ -130,7 +126,7 @@ EdgeIndexIterator::~EdgeIndexIterator() {
   }
 }
 
-IndexElement* EdgeIndexIterator::next() {
+IndexLookupResult EdgeIndexIterator::next() {
   while (_iterator.valid()) {
     if (_buffer.empty()) {
       // We start a new lookup
@@ -140,38 +136,39 @@ IndexElement* EdgeIndexIterator::next() {
       if (tmp.isObject()) {
         tmp = tmp.get(StaticStrings::IndexEq);
       }
-      _index->lookupByKey(_trx, &tmp, _buffer, _batchSize);
+      IndexLookupContext context(_trx, _collection); 
+      _index->lookupByKey(&context, &tmp, _buffer, _batchSize);
     } else if (_posInBuffer >= _buffer.size()) {
       // We have to refill the buffer
-      TRI_ASSERT(_lastElement != nullptr);
       _buffer.clear();
 
       _posInBuffer = 0;
-      _index->lookupByKeyContinue(_trx, _lastElement, _buffer, _batchSize);
+      IndexLookupContext context(_trx, _collection); 
+      _index->lookupByKeyContinue(&context, _lastElement, _buffer, _batchSize);
     }
     
     if (_buffer.empty()) {
-      _lastElement = nullptr;
+      _lastElement = SimpleIndexElement();
     } else {
       _lastElement = _buffer.back();
       // found something
-      return _buffer.at(_posInBuffer++);
+      return IndexLookupResult(_buffer.at(_posInBuffer++).revisionId());
     }
 
     // found no result. now go to next lookup value in _keys
     _iterator.next();
   }
 
-  return nullptr;
+  return IndexLookupResult();
 }
 
-void EdgeIndexIterator::nextBabies(std::vector<IndexElement*>& buffer, size_t limit) {
+void EdgeIndexIterator::nextBabies(std::vector<IndexLookupResult>& buffer, size_t limit) {
   size_t atMost = _batchSize > limit ? limit : _batchSize;
 
   if (atMost == 0) {
     // nothing to do
     buffer.clear();
-    _lastElement = nullptr;
+    _lastElement = SimpleIndexElement();
     return;
   }
 
@@ -182,21 +179,23 @@ void EdgeIndexIterator::nextBabies(std::vector<IndexElement*>& buffer, size_t li
       if (tmp.isObject()) {
         tmp = tmp.get(StaticStrings::IndexEq);
       }
-      _index->lookupByKey(_trx, &tmp, _buffer, atMost);
+      IndexLookupContext context(_trx, _collection); 
+      _index->lookupByKey(&context, &tmp, _buffer, atMost);
       // fallthrough intentional
     } else {
       // Continue the lookup
       buffer.clear();
 
-      _index->lookupByKeyContinue(_trx, _lastElement, _buffer, atMost);
+      IndexLookupContext context(_trx, _collection); 
+      _index->lookupByKeyContinue(&context, _lastElement, _buffer, atMost);
     }
 
     for (auto& it : _buffer) {
-      buffer.emplace_back(it);
+      buffer.emplace_back(it.revisionId());
     }
     
     if (_buffer.empty()) {
-      _lastElement = nullptr;
+      _lastElement = SimpleIndexElement();
     } else {
       _lastElement = _buffer.back();
       // found something
@@ -214,31 +213,31 @@ void EdgeIndexIterator::reset() {
   _posInBuffer = 0;
   _buffer.clear();
   _iterator.reset();
-  _lastElement = nullptr;
+  _lastElement = SimpleIndexElement();
 }
 
-IndexElement* AnyDirectionEdgeIndexIterator::next() {
-  IndexElement* res = nullptr;
+IndexLookupResult AnyDirectionEdgeIndexIterator::next() {
+  IndexLookupResult res;
   if (_useInbound) {
     do {
       res = _inbound->next();
-    } while (res != nullptr && _seen.find(res->revisionId()) != _seen.end());
+    } while (res && _seen.find(res.revisionId()) != _seen.end());
     return res;
   }
   res = _outbound->next();
-  if (res == nullptr) {
+  if (!res) {
     _useInbound = true;
     return next();
   }
-  _seen.emplace(res->revisionId());
+  _seen.emplace(res.revisionId());
   return res;
 }
 
-void AnyDirectionEdgeIndexIterator::nextBabies(std::vector<IndexElement*>& result, size_t limit) {
+void AnyDirectionEdgeIndexIterator::nextBabies(std::vector<IndexLookupResult>& result, size_t limit) {
   result.clear();
   for (size_t i = 0; i < limit; ++i) {
-    IndexElement* res = next();
-    if (res == nullptr) {
+    IndexLookupResult res = next();
+    if (!res) {
       return;
     }
     result.emplace_back(res);
@@ -281,16 +280,7 @@ EdgeIndex::EdgeIndex(TRI_idx_iid_t iid, arangodb::LogicalCollection* collection)
 }
 
 EdgeIndex::~EdgeIndex() {
-  auto cb = [this](IndexElement* element) -> bool { 
-    element->free(1);
-    return true; 
-  };
-
-  // must invoke the free callback on all index elements to prevent leaks :snake:
-  _edgesFrom->invokeOnAllElements(cb);
   delete _edgesFrom;
-
-  _edgesTo->invokeOnAllElements(cb);
   delete _edgesTo;
 }
 
@@ -470,44 +460,40 @@ void EdgeIndex::toVelocyPackFigures(VPackBuilder& builder) const {
 
 int EdgeIndex::insert(arangodb::Transaction* trx, TRI_voc_rid_t revisionId,
                       VPackSlice const& doc, bool isRollback) {
-  IndexElementGuard fromElement(buildFromElement(revisionId, doc), 1);
-  IndexElementGuard toElement(buildToElement(revisionId, doc), 1);
+  SimpleIndexElement fromElement(buildFromElement(revisionId, doc));
+  SimpleIndexElement toElement(buildToElement(revisionId, doc));
 
-  if (!fromElement || !toElement) {
-    return TRI_ERROR_OUT_OF_MEMORY;
-  }
-  
-  _edgesFrom->insert(trx, fromElement.get(), true, isRollback);
+  IndexLookupContext context(trx, _collection); 
+  _edgesFrom->insert(&context, fromElement, true, isRollback);
 
   try {
-    _edgesTo->insert(trx, toElement.get(), true, isRollback);
+    _edgesTo->insert(&context, toElement, true, isRollback);
   } catch (...) {
     // roll back partial insert
-    _edgesFrom->remove(trx, fromElement.get());
+    _edgesFrom->remove(&context, fromElement);
     return TRI_ERROR_OUT_OF_MEMORY;
   }
-
-  // transfer ownership
-  fromElement.release();
-  toElement.release();
 
   return TRI_ERROR_NO_ERROR;
 }
 
 int EdgeIndex::remove(arangodb::Transaction* trx, TRI_voc_rid_t revisionId,
                       VPackSlice const& doc, bool isRollback) {
-  IndexElementGuard fromElement(buildFromElement(revisionId, doc), 1);
-  IndexElementGuard toElement(buildToElement(revisionId, doc), 1);
+  SimpleIndexElement fromElement(buildFromElement(revisionId, doc));
+  SimpleIndexElement toElement(buildToElement(revisionId, doc));
   
-  if (!fromElement || !toElement) {
-    return TRI_ERROR_OUT_OF_MEMORY;
+  IndexLookupContext context(trx, _collection); 
+ 
+  try { 
+    _edgesFrom->remove(&context, fromElement);
+    _edgesTo->remove(&context, toElement);
+    return TRI_ERROR_NO_ERROR;
+  } catch (...) {
+    if (isRollback) {
+      return TRI_ERROR_NO_ERROR;
+    }
+    return TRI_ERROR_ARANGO_DOCUMENT_NOT_FOUND;
   }
-
-  // will free the elements that were removed from the index...
-  IndexElementGuard oldFrom(_edgesFrom->remove(trx, fromElement.get()), 1);
-  IndexElementGuard oldTo(_edgesTo->remove(trx, toElement.get()), 1);
-  
-  return TRI_ERROR_NO_ERROR;
 }
 
 int EdgeIndex::batchInsert(arangodb::Transaction* trx,
@@ -516,7 +502,7 @@ int EdgeIndex::batchInsert(arangodb::Transaction* trx,
   if (documents.empty()) {
     return TRI_ERROR_NO_ERROR;
   }
-
+/* TODO
   // TODO: OOM 
   std::vector<IndexElement*> elements;
   elements.reserve(documents.size());
@@ -564,18 +550,14 @@ int EdgeIndex::batchInsert(arangodb::Transaction* trx,
   // ownership for _to elements is now in index
   // prevent cleaning up of what we just inserted
   elements.clear();
-
+*/
   return TRI_ERROR_NO_ERROR;
 }
 
 /// @brief unload the index data from memory
 int EdgeIndex::unload() {
-  auto cb = [](IndexElement* element) -> bool {
-    element->free(1); 
-    return true;
-  };
-  _edgesFrom->truncate(cb);
-  _edgesTo->truncate(cb);
+  _edgesFrom->truncate([](SimpleIndexElement const&) { return true; });
+  _edgesTo->truncate([](SimpleIndexElement const&) { return true; });
 
   return TRI_ERROR_NO_ERROR;
 }
@@ -591,7 +573,8 @@ int EdgeIndex::sizeHint(arangodb::Transaction* trx, size_t size) {
 
   // set an initial size for the index for some new nodes to be created
   // without resizing
-  int err = _edgesFrom->resize(trx, static_cast<uint32_t>(size + 2049));
+  IndexLookupContext context(trx, _collection); 
+  int err = _edgesFrom->resize(&context, static_cast<uint32_t>(size + 2049));
 
   if (err != TRI_ERROR_NO_ERROR) {
     return err;
@@ -603,7 +586,7 @@ int EdgeIndex::sizeHint(arangodb::Transaction* trx, size_t size) {
 
   // set an initial size for the index for some new nodes to be created
   // without resizing
-  return _edgesTo->resize(trx, static_cast<uint32_t>(size + 2049));
+  return _edgesTo->resize(&context, static_cast<uint32_t>(size + 2049));
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -625,7 +608,7 @@ bool EdgeIndex::supportsFilterCondition(
 ////////////////////////////////////////////////////////////////////////////////
 
 IndexIterator* EdgeIndex::iteratorForCondition(
-    arangodb::Transaction* trx, IndexIteratorContext* context,
+    arangodb::Transaction* trx, 
     arangodb::aql::AstNode const* node,
     arangodb::aql::Variable const* reference, bool reverse) const {
   TRI_ASSERT(node->type == aql::NODE_TYPE_OPERATOR_NARY_AND);
@@ -647,7 +630,7 @@ IndexIterator* EdgeIndex::iteratorForCondition(
 
   if (comp->type == aql::NODE_TYPE_OPERATOR_BINARY_EQ) {
     // a.b == value
-    return createEqIterator(trx, context, attrNode, valNode);
+    return createEqIterator(trx, attrNode, valNode);
   }
 
   if (comp->type == aql::NODE_TYPE_OPERATOR_BINARY_IN) {
@@ -656,7 +639,7 @@ IndexIterator* EdgeIndex::iteratorForCondition(
       return nullptr;
     }
 
-    return createInIterator(trx, context, attrNode, valNode);
+    return createInIterator(trx, attrNode, valNode);
   }
 
   // operator type unsupported
@@ -730,7 +713,7 @@ void EdgeIndex::expandInSearchValues(VPackSlice const slice,
 ////////////////////////////////////////////////////////////////////////////////
 
 IndexIterator* EdgeIndex::iteratorForSlice(
-    arangodb::Transaction* trx, IndexIteratorContext*,
+    arangodb::Transaction* trx, 
     arangodb::velocypack::Slice const searchValues, bool) const {
   if (!searchValues.isArray() || searchValues.length() != 2) {
     // Invalid searchValue
@@ -776,7 +759,7 @@ IndexIterator* EdgeIndex::iteratorForSlice(
 ////////////////////////////////////////////////////////////////////////////////
 
 IndexIterator* EdgeIndex::createEqIterator(
-    arangodb::Transaction* trx, IndexIteratorContext* context,
+    arangodb::Transaction* trx, 
     arangodb::aql::AstNode const* attrNode,
     arangodb::aql::AstNode const* valNode) const {
   
@@ -802,7 +785,7 @@ IndexIterator* EdgeIndex::createEqIterator(
 ////////////////////////////////////////////////////////////////////////////////
 
 IndexIterator* EdgeIndex::createInIterator(
-    arangodb::Transaction* trx, IndexIteratorContext* context,
+    arangodb::Transaction* trx, 
     arangodb::aql::AstNode const* attrNode,
     arangodb::aql::AstNode const* valNode) const {
   
@@ -849,12 +832,16 @@ void EdgeIndex::handleValNode(VPackBuilder* keys,
   }
 }
 
-IndexElement* EdgeIndex::buildFromElement(TRI_voc_rid_t revisionId, VPackSlice const& doc) const {
+SimpleIndexElement EdgeIndex::buildFromElement(TRI_voc_rid_t revisionId, VPackSlice const& doc) const {
   TRI_ASSERT(doc.isObject());
-  return buildStringElement(revisionId, Transaction::extractFromFromDocument(doc));
+  VPackSlice value(Transaction::extractFromFromDocument(doc));
+  TRI_ASSERT(value.isString());
+  return SimpleIndexElement(revisionId, value, static_cast<uint32_t>(value.begin() - doc.begin()));
 }
 
-IndexElement* EdgeIndex::buildToElement(TRI_voc_rid_t revisionId, VPackSlice const& doc) const {
+SimpleIndexElement EdgeIndex::buildToElement(TRI_voc_rid_t revisionId, VPackSlice const& doc) const {
   TRI_ASSERT(doc.isObject());
-  return buildStringElement(revisionId, Transaction::extractToFromDocument(doc));
+  VPackSlice value(Transaction::extractToFromDocument(doc));
+  TRI_ASSERT(value.isString());
+  return SimpleIndexElement(revisionId, value, static_cast<uint32_t>(value.begin() - doc.begin()));
 }

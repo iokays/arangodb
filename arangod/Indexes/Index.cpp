@@ -572,7 +572,6 @@ bool Index::supportsSortCondition(arangodb::aql::SortCondition const*,
 ////////////////////////////////////////////////////////////////////////////////
 
 IndexIterator* Index::iteratorForCondition(arangodb::Transaction*,
-                                           IndexIteratorContext*,
                                            arangodb::aql::AstNode const*,
                                            arangodb::aql::Variable const*,
                                            bool) const {

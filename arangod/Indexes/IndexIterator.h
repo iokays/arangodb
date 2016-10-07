@@ -30,34 +30,8 @@
 #include "VocBase/vocbase.h"
 
 namespace arangodb {
-class CollectionNameResolver;
 class LogicalCollection;
 class Transaction;
-
-////////////////////////////////////////////////////////////////////////////////
-/// @brief context for an index iterator
-////////////////////////////////////////////////////////////////////////////////
-
-struct IndexIteratorContext {
-  IndexIteratorContext(IndexIteratorContext const&) = delete;
-  IndexIteratorContext& operator=(IndexIteratorContext const&) = delete;
-  
-  IndexIteratorContext() = delete;
-  IndexIteratorContext(TRI_vocbase_t*, CollectionNameResolver const*, ServerState::RoleEnum);
-
-  ~IndexIteratorContext();
-
-  CollectionNameResolver const* getResolver() const;
-
-  bool isCluster() const;
-
-  int resolveId(char const*, size_t, TRI_voc_cid_t&, char const*&, size_t&) const;
-
-  TRI_vocbase_t* vocbase;
-  mutable CollectionNameResolver const* resolver;
-  ServerState::RoleEnum serverRole;
-  bool ownsResolver;
-};
 
 ////////////////////////////////////////////////////////////////////////////////
 /// @brief a base class to iterate over the index. An iterator is requested
@@ -80,9 +54,9 @@ class IndexIterator {
   LogicalCollection* collection() const { return _collection; }
   arangodb::Transaction* transaction() const { return _trx; }
 
-  virtual IndexElement* next();
+  virtual IndexLookupResult next();
 
-  virtual void nextBabies(std::vector<IndexElement*>&, size_t);
+  virtual void nextBabies(std::vector<IndexLookupResult>&, size_t);
 
   virtual void reset();
 
@@ -106,9 +80,9 @@ class EmptyIndexIterator final : public IndexIterator {
 
     char const* typeName() const override { return "empty-index-iterator"; }
 
-    IndexElement* next() override { return nullptr; }
+    IndexLookupResult next() override { return IndexLookupResult(); }
 
-    void nextBabies(std::vector<IndexElement*>&, size_t) override {}
+    void nextBabies(std::vector<IndexLookupResult>&, size_t) override {}
 
     void reset() override {}
 
@@ -151,7 +125,7 @@ class MultiIndexIterator final : public IndexIterator {
     ///        A nullptr indicates that all iterators are exhausted
     ////////////////////////////////////////////////////////////////////////////////
 
-    IndexElement* next() override;
+    IndexLookupResult next() override;
 
     ////////////////////////////////////////////////////////////////////////////////
     /// @brief Get at most the next limit many elements
@@ -159,7 +133,7 @@ class MultiIndexIterator final : public IndexIterator {
     ///        An empty result vector indicates that all iterators are exhausted
     ////////////////////////////////////////////////////////////////////////////////
     
-    void nextBabies(std::vector<IndexElement*>&, size_t) override;
+    void nextBabies(std::vector<IndexLookupResult>&, size_t) override;
 
     ////////////////////////////////////////////////////////////////////////////////
     /// @brief Reset the cursor

@@ -37,6 +37,7 @@ class Transaction;
 namespace arangodb {
 class DocumentDitch;
 class LogicalCollection;
+class Transaction;
 
 namespace wal {
 struct DocumentOperation;
@@ -255,13 +256,13 @@ int TRI_BeginTransaction(TRI_transaction_t*, TRI_transaction_hint_t, int);
 /// @brief commit a transaction
 ////////////////////////////////////////////////////////////////////////////////
 
-int TRI_CommitTransaction(TRI_transaction_t*, int);
+int TRI_CommitTransaction(arangodb::Transaction*, TRI_transaction_t*, int);
 
 ////////////////////////////////////////////////////////////////////////////////
 /// @brief abort a transaction
 ////////////////////////////////////////////////////////////////////////////////
 
-int TRI_AbortTransaction(TRI_transaction_t*, int);
+int TRI_AbortTransaction(arangodb::Transaction*, TRI_transaction_t*, int);
 
 ////////////////////////////////////////////////////////////////////////////////
 /// @brief whether or not a transaction consists of a single operation

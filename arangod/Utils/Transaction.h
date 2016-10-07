@@ -176,6 +176,10 @@ class Transaction {
   
   inline ServerState::RoleEnum serverRole() const { return _serverRole; }
   
+  bool isCluster();
+
+  int resolveId(char const* handle, size_t length, TRI_voc_cid_t& cid, char const*& key, size_t& outLength); 
+  
   //////////////////////////////////////////////////////////////////////////////
   /// @brief return a pointer to the transaction context
   //////////////////////////////////////////////////////////////////////////////
@@ -451,7 +455,7 @@ class Transaction {
   //////////////////////////////////////////////////////////////////////////////
 
   void invokeOnAllElements(std::string const& collectionName,
-                           std::function<bool(IndexElement const*)>);
+                           std::function<bool(SimpleIndexElement const&)>);
 
   //////////////////////////////////////////////////////////////////////////////
   /// @brief return one  document from a collection, fast path
@@ -1051,7 +1055,7 @@ class Transaction {
   /// @brief pointer to transaction context (faster than shared ptr)
   //////////////////////////////////////////////////////////////////////////////
   
-  TransactionContext* _transactionContextPtr;
+  TransactionContext* const _transactionContextPtr;
 
  public:
   //////////////////////////////////////////////////////////////////////////////

@@ -1074,8 +1074,8 @@ int InitialSyncer::handleSyncKeys(arangodb::LogicalCollection* col,
 
     uint64_t iterations = 0;
     ManagedMultiDocumentResult mmdr;
-    trx.invokeOnAllElements(trx.name(), [this, &trx, &mmdr, &markers, &iterations, &idx](IndexElement const* element) {
-      if (idx->collection()->readRevision(&trx, mmdr, element->revisionId())) {
+    trx.invokeOnAllElements(trx.name(), [this, &trx, &mmdr, &markers, &iterations, &idx](SimpleIndexElement const& element) {
+      if (idx->collection()->readRevision(&trx, mmdr, element.revisionId())) {
         uint8_t const* vpack = mmdr.back();
         markers.emplace_back(vpack);
         
@@ -1472,12 +1472,12 @@ int InitialSyncer::handleSyncKeys(arangodb::LogicalCollection* col,
           }
         }
 
-        auto mptr = idx->lookupKey(&trx, keySlice);
+        SimpleIndexElement element = idx->lookupKey(&trx, keySlice);
 
-        if (mptr == nullptr) {
+        if (!element) {
           // key not found locally
           toFetch.emplace_back(i);
-        } else if (TRI_RidToString(mptr->revisionId()) != pair.at(1).copyString()) {
+        } else if (TRI_RidToString(element.revisionId()) != pair.at(1).copyString()) {
           // key found, but revision id differs
           toFetch.emplace_back(i);
           ++nextStart;
@@ -1595,9 +1595,9 @@ int InitialSyncer::handleSyncKeys(arangodb::LogicalCollection* col,
             return TRI_ERROR_REPLICATION_INVALID_RESPONSE;
           }
 
-          auto mptr = idx->lookupKey(&trx, keySlice);
+          SimpleIndexElement element = idx->lookupKey(&trx, keySlice);
 
-          if (mptr == nullptr) {
+          if (!element) {
             // INSERT
             OperationResult opRes = trx.insert(collectionName, it, options);
             res = opRes.code;

@@ -578,13 +578,13 @@ void CollectorThread::processCollectionMarker(
     Transaction::extractKeyAndRevFromDocument(slice, keySlice, revisionId);
   
     bool wasAdjusted = false;
-    IndexElement const* element = collection->primaryIndex()->lookupKey(&trx, keySlice);
+    SimpleIndexElement element = collection->primaryIndex()->lookupKey(&trx, keySlice);
 
-    if (element != nullptr && 
-        element->revisionId() == revisionId) { 
+    if (element &&
+        element.revisionId() == revisionId) { 
       // make it point to datafile now
       TRI_df_marker_t const* newPosition = reinterpret_cast<TRI_df_marker_t const*>(operation.datafilePosition);
-      wasAdjusted = collection->updateRevisionConditional(element->revisionId(), walMarker, newPosition, fid, false); 
+      wasAdjusted = collection->updateRevisionConditional(element.revisionId(), walMarker, newPosition, fid, false); 
     }
       
     if (wasAdjusted) {
@@ -609,9 +609,10 @@ void CollectorThread::processCollectionMarker(
     TRI_voc_rid_t revisionId = 0;
     Transaction::extractKeyAndRevFromDocument(slice, keySlice, revisionId);
 
-    IndexElement const* found = collection->primaryIndex()->lookupKey(&trx, keySlice);
+    SimpleIndexElement found = collection->primaryIndex()->lookupKey(&trx, keySlice);
 
-    if (found != nullptr && found->revisionId() > revisionId) {
+    if (found && 
+        found.revisionId() > revisionId) {
       // somebody re-created the document with a newer revision
       dfi.numberDead++;
       dfi.sizeDead += DatafileHelper::AlignedSize<int64_t>(datafileMarkerSize);

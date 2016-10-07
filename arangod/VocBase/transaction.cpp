@@ -173,10 +173,12 @@ static char const* StatusTransaction(const TRI_transaction_status_e status) {
 /// @brief free all operations for a transaction
 ////////////////////////////////////////////////////////////////////////////////
 
-static void FreeOperations(TRI_transaction_t* trx) {
+static void FreeOperations(arangodb::Transaction* activeTrx, TRI_transaction_t* trx) {
   bool const mustRollback = (trx->_status == TRI_TRANSACTION_ABORTED);
   bool const isSingleOperation = IsSingleOperationTransaction(trx);
-      
+     
+  TRI_ASSERT(activeTrx != nullptr);
+   
   for (auto& trxCollection : trx->_collections) {
     if (trxCollection->_operations == nullptr) {
       continue;
@@ -190,15 +192,22 @@ static void FreeOperations(TRI_transaction_t* trx) {
            it != trxCollection->_operations->rend(); ++it) {
         arangodb::wal::DocumentOperation* op = (*it);
 
-        op->revert();
+        try {
+          op->revert(activeTrx);
+        } catch (...) {
+          // TODO: decide whether we should rethrow here
+        }
+        delete op;
       }
-    } 
+    } else {
+      // no rollback. simply delete all operations
+      for (auto it = trxCollection->_operations->rbegin();
+           it != trxCollection->_operations->rend(); ++it) {
+        arangodb::wal::DocumentOperation* op = (*it);
 
-    for (auto it = trxCollection->_operations->rbegin();
-         it != trxCollection->_operations->rend(); ++it) {
-      arangodb::wal::DocumentOperation* op = (*it);
-
-      delete op;
+        //op->done(); // set to done so dtor of DocumentOperation won't fail 
+        delete op;
+      }
     }
 
     if (mustRollback) {
@@ -1156,7 +1165,7 @@ int TRI_BeginTransaction(TRI_transaction_t* trx, TRI_transaction_hint_t hints,
 /// @brief commit a transaction
 ////////////////////////////////////////////////////////////////////////////////
 
-int TRI_CommitTransaction(TRI_transaction_t* trx, int nestingLevel) {
+int TRI_CommitTransaction(arangodb::Transaction* activeTrx, TRI_transaction_t* trx, int nestingLevel) {
   LOG_TRX(trx, nestingLevel) << "committing " << (trx->_type == TRI_TRANSACTION_READ ? "read" : "write") << " transaction";
 
   TRI_ASSERT(trx->_status == TRI_TRANSACTION_RUNNING);
@@ -1170,7 +1179,7 @@ int TRI_CommitTransaction(TRI_transaction_t* trx, int nestingLevel) {
 
       if (!status.ok()) {
         res = TRI_ERROR_INTERNAL;
-        TRI_AbortTransaction(trx, nestingLevel);
+        TRI_AbortTransaction(activeTrx, trx, nestingLevel);
         return res;
       }
     }
@@ -1180,7 +1189,7 @@ int TRI_CommitTransaction(TRI_transaction_t* trx, int nestingLevel) {
 
     if (res != TRI_ERROR_NO_ERROR) {
       // TODO: revert rocks transaction somehow
-      TRI_AbortTransaction(trx, nestingLevel);
+      TRI_AbortTransaction(activeTrx, trx, nestingLevel);
 
       // return original error
       return res;
@@ -1195,7 +1204,7 @@ int TRI_CommitTransaction(TRI_transaction_t* trx, int nestingLevel) {
       ClearQueryCache(trx);
     }
 
-    FreeOperations(trx);
+    FreeOperations(activeTrx, trx);
   }
 
   UnuseCollections(trx, nestingLevel);
@@ -1207,7 +1216,7 @@ int TRI_CommitTransaction(TRI_transaction_t* trx, int nestingLevel) {
 /// @brief abort and rollback a transaction
 ////////////////////////////////////////////////////////////////////////////////
 
-int TRI_AbortTransaction(TRI_transaction_t* trx, int nestingLevel) {
+int TRI_AbortTransaction(arangodb::Transaction* activeTrx, TRI_transaction_t* trx, int nestingLevel) {
   LOG_TRX(trx, nestingLevel) << "aborting " << (trx->_type == TRI_TRANSACTION_READ ? "read" : "write") << " transaction";
 
   TRI_ASSERT(trx->_status == TRI_TRANSACTION_RUNNING);
@@ -1219,7 +1228,7 @@ int TRI_AbortTransaction(TRI_transaction_t* trx, int nestingLevel) {
 
     UpdateTransactionStatus(trx, TRI_TRANSACTION_ABORTED);
 
-    FreeOperations(trx);
+    FreeOperations(activeTrx, trx);
   }
 
   UnuseCollections(trx, nestingLevel);
@@ -1269,9 +1278,7 @@ TRI_transaction_t::TRI_transaction_t(TRI_vocbase_t* vocbase, double timeout, boo
 ////////////////////////////////////////////////////////////////////////////////
 
 TRI_transaction_t::~TRI_transaction_t() {
-  if (_status == TRI_TRANSACTION_RUNNING) {
-    TRI_AbortTransaction(this, 0);
-  }
+  TRI_ASSERT(_status != TRI_TRANSACTION_RUNNING);
 
 #ifdef ARANGODB_ENABLE_ROCKSDB
   delete _rocksTransaction;

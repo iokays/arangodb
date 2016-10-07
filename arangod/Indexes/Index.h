@@ -57,7 +57,6 @@ class Transaction;
 
 namespace arangodb {
 class IndexIterator;
-struct IndexIteratorContext;
 
 class Index {
  public:
@@ -268,13 +267,11 @@ class Index {
                                      double&, size_t&) const;
 
   virtual IndexIterator* iteratorForCondition(arangodb::Transaction*,
-                                              IndexIteratorContext*,
                                               arangodb::aql::AstNode const*,
                                               arangodb::aql::Variable const*,
                                               bool) const;
 
   virtual IndexIterator* iteratorForSlice(arangodb::Transaction*,
-                                          IndexIteratorContext*,
                                           arangodb::velocypack::Slice const,
                                           bool) const {
     THROW_ARANGO_EXCEPTION(TRI_ERROR_NOT_IMPLEMENTED);

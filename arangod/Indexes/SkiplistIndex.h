@@ -206,7 +206,7 @@ class SkiplistIterator final : public IndexIterator {
   /// @brief Get the next element in the skiplist
   ////////////////////////////////////////////////////////////////////////////////
 
-  IndexElement* next() override;
+  IndexLookupResult next() override;
 
   ////////////////////////////////////////////////////////////////////////////////
   /// @brief Reset the cursor
@@ -287,7 +287,7 @@ class SkiplistIterator2 final : public IndexIterator {
   /// @brief Get the next element in the skiplist
   ////////////////////////////////////////////////////////////////////////////////
 
-  IndexElement* next() override;
+  IndexLookupResult next() override;
 
   ////////////////////////////////////////////////////////////////////////////////
   /// @brief Reset the cursor
@@ -400,7 +400,6 @@ class SkiplistIndex final : public PathBasedIndex {
                              double&, size_t&) const override;
 
   IndexIterator* iteratorForCondition(arangodb::Transaction*,
-                                      IndexIteratorContext*,
                                       arangodb::aql::AstNode const*,
                                       arangodb::aql::Variable const*,
                                       bool) const override;

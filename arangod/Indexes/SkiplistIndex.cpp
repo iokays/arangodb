@@ -516,10 +516,10 @@ void SkiplistIterator::reset() {
 /// @brief Get the next element in the skiplist
 ////////////////////////////////////////////////////////////////////////////////
 
-IndexElement* SkiplistIterator::next() {
+IndexLookupResult SkiplistIterator::next() {
   if (_cursor == nullptr) {
     // We are exhausted already, sorry
-    return nullptr;
+    return IndexLookupResult();
   }
   Node* tmp = _cursor;
   if (_reverse) {
@@ -537,7 +537,7 @@ IndexElement* SkiplistIterator::next() {
   }
   TRI_ASSERT(tmp != nullptr);
   TRI_ASSERT(tmp->document() != nullptr);
-  return tmp->document();
+  return IndexLookupResult(tmp->document()->revisionId());
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -586,10 +586,10 @@ void SkiplistIterator2::reset() {
 /// @brief Get the next element in the skiplist
 ////////////////////////////////////////////////////////////////////////////////
 
-IndexElement* SkiplistIterator2::next() {
+IndexLookupResult SkiplistIterator2::next() {
   if (_cursor == nullptr) {
     // We are exhausted already, sorry
-    return nullptr;
+    return IndexLookupResult();
   }
   TRI_ASSERT(_currentInterval < _intervals.size());
   auto const& interval = _intervals[_currentInterval];
@@ -609,7 +609,7 @@ IndexElement* SkiplistIterator2::next() {
   }
   TRI_ASSERT(tmp != nullptr);
   TRI_ASSERT(tmp->document() != nullptr);
-  return tmp->document();
+  return IndexLookupResult(tmp->document()->revisionId());
 }
 
 void SkiplistIterator2::forwardCursor() {
@@ -1383,7 +1383,7 @@ bool SkiplistIndex::findMatchingConditions(
 }
 
 IndexIterator* SkiplistIndex::iteratorForCondition(
-    arangodb::Transaction* trx, IndexIteratorContext*,
+    arangodb::Transaction* trx, 
     arangodb::aql::AstNode const* node,
     arangodb::aql::Variable const* reference, bool reverse) const {
   std::vector<std::vector<arangodb::aql::AstNode const*>> mapping;

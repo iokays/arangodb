@@ -69,6 +69,7 @@ int MMFilesCollection::OpenIteratorHandleDocumentMarker(TRI_df_marker_t const* m
   LogicalCollection* collection = state->_collection;
   MMFilesCollection* c = static_cast<MMFilesCollection*>(collection->getPhysical());
   arangodb::Transaction* trx = state->_trx;
+  TRI_ASSERT(trx != nullptr);
 
   VPackSlice const slice(reinterpret_cast<char const*>(marker) + DatafileHelper::VPackOffset(TRI_DF_MARKER_VPACK_DOCUMENT));
 
@@ -95,10 +96,10 @@ int MMFilesCollection::OpenIteratorHandleDocumentMarker(TRI_df_marker_t const* m
 
   // no primary index lock required here because we are the only ones reading
   // from the index ATM
-  IndexElement* found = primaryIndex->lookupKey(trx, keySlice);
+  SimpleIndexElement* found = primaryIndex->lookupKeyRef(trx, keySlice);
 
   // it is a new entry
-  if (found == nullptr) {
+  if (found == nullptr || found->revisionId() == 0) {
     uint8_t const* vpack = reinterpret_cast<uint8_t const*>(marker) + arangodb::DatafileHelper::VPackOffset(TRI_DF_MARKER_VPACK_DOCUMENT);
     c->insertRevision(revisionId, vpack, fid, false); 
 
@@ -112,8 +113,6 @@ int MMFilesCollection::OpenIteratorHandleDocumentMarker(TRI_df_marker_t const* m
       return res;
     }
 
-    collection->incNumberDocuments();
-
     // update the datafile info
     state->_dfi->numberAlive++;
     state->_dfi->sizeAlive += DatafileHelper::AlignedMarkerSize<int64_t>(marker);
@@ -124,7 +123,7 @@ int MMFilesCollection::OpenIteratorHandleDocumentMarker(TRI_df_marker_t const* m
     uint8_t const* vpack = reinterpret_cast<uint8_t const*>(marker) + arangodb::DatafileHelper::VPackOffset(TRI_DF_MARKER_VPACK_DOCUMENT);
     TRI_voc_rid_t const oldRevisionId = found->revisionId();
     // update the revision id in primary index
-    found->updateRevisionId(revisionId);
+    found->updateRevisionId(revisionId, static_cast<uint32_t>(keySlice.begin() - slice.begin()));
 
     MMFilesDocumentPosition const old = c->lookupRevision(oldRevisionId);
 
@@ -190,17 +189,17 @@ int MMFilesCollection::OpenIteratorHandleDeletionMarker(TRI_df_marker_t const* m
   // no primary index lock required here because we are the only ones reading
   // from the index ATM
   auto primaryIndex = collection->primaryIndex();
-  IndexElement* found = primaryIndex->lookupKey(trx, keySlice);
+  SimpleIndexElement found = primaryIndex->lookupKey(trx, keySlice);
 
   // it is a new entry, so we missed the create
-  if (found == nullptr) {
+  if (!found) {
     // update the datafile info
     state->_dfi->numberDeletions++;
   }
 
   // it is a real delete
   else {
-    TRI_voc_rid_t oldRevisionId = found->revisionId();
+    TRI_voc_rid_t oldRevisionId = found.revisionId();
 
     MMFilesDocumentPosition const old = c->lookupRevision(oldRevisionId);
     
@@ -225,7 +224,6 @@ int MMFilesCollection::OpenIteratorHandleDeletionMarker(TRI_df_marker_t const* m
     state->_dfi->numberDeletions++;
 
     collection->deletePrimaryIndex(trx, oldRevisionId, VPackSlice(vpack));
-    collection->decNumberDocuments();
 
     c->removeRevision(oldRevisionId, true);
   }
@@ -1068,7 +1066,7 @@ void MMFilesCollection::finishCompaction() {
 /// @brief iterate all markers of the collection
 int MMFilesCollection::iterateMarkersOnLoad(arangodb::Transaction* trx) {
   // initialize state for iteration
-  OpenIteratorState openState(_logicalCollection);
+  OpenIteratorState openState(_logicalCollection, trx);
 
   if (_initialCount != -1) {
     auto primaryIndex = _logicalCollection->primaryIndex();

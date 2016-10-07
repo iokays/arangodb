@@ -22,6 +22,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 
 #include "IndexElement.h"
+#include "Indexes/IndexLookupContext.h"
 
 using namespace arangodb;
 
@@ -89,6 +90,19 @@ void IndexElement::free(size_t numSubs) {
   TRI_Free(TRI_UNKNOWN_MEM_ZONE, this);
 }
    
-void IndexElement::updateRevisionId(TRI_voc_rid_t revisionId) { 
-  _revisionId = revisionId; 
+SimpleIndexElement::SimpleIndexElement(TRI_voc_rid_t revisionId, arangodb::velocypack::Slice const& value, uint32_t offset)
+    : _revisionId(revisionId), _hashAndOffset(hash(value) | (static_cast<uint64_t>(offset) << 32)) {} 
+  
+uint64_t SimpleIndexElement::hash(arangodb::velocypack::Slice const& value) {
+  TRI_ASSERT(value.isString());
+  return value.hashString() & 0x00000000FFFFFFFFULL;
 }
+
+VPackSlice SimpleIndexElement::slice(IndexLookupContext* context) const {
+  uint8_t const* vpack = context->lookup(_revisionId);
+  if (vpack == nullptr) {
+    THROW_ARANGO_EXCEPTION(TRI_ERROR_ARANGO_DOCUMENT_NOT_FOUND);
+  } 
+  return VPackSlice(vpack + offset());
+}
+

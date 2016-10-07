@@ -40,7 +40,7 @@ namespace arangodb {
 class PrimaryIndex;
 class Transaction;
   
-typedef arangodb::basics::AssocUnique<uint8_t, IndexElement*> PrimaryIndexImpl;
+typedef arangodb::basics::AssocUnique<uint8_t, SimpleIndexElement> PrimaryIndexImpl;
 
 class PrimaryIndexIterator final : public IndexIterator {
  public:
@@ -61,7 +61,7 @@ class PrimaryIndexIterator final : public IndexIterator {
     
   char const* typeName() const override { return "primary-index-iterator"; }
 
-  IndexElement* next() override;
+  IndexLookupResult next() override;
 
   void reset() override;
 
@@ -82,9 +82,9 @@ class AllIndexIterator final : public IndexIterator {
     
   char const* typeName() const override { return "all-index-iterator"; }
 
-  IndexElement* next() override;
+  IndexLookupResult next() override;
   
-  void nextBabies(std::vector<IndexElement*>&, size_t) override;
+  void nextBabies(std::vector<IndexLookupResult>&, size_t) override;
 
   void reset() override;
 
@@ -105,7 +105,7 @@ class AnyIndexIterator final : public IndexIterator {
   
   char const* typeName() const override { return "any-index-iterator"; }
 
-  IndexElement* next() override;
+  IndexLookupResult next() override;
 
   void reset() override;
 
@@ -155,8 +155,8 @@ class PrimaryIndex final : public Index {
 
   int unload() override;
 
- public:
-  IndexElement* lookupKey(arangodb::Transaction*, VPackSlice const&) const;
+  SimpleIndexElement lookupKey(arangodb::Transaction*, VPackSlice const&) const;
+  SimpleIndexElement* lookupKeyRef(arangodb::Transaction*, VPackSlice const&) const;
 
   //////////////////////////////////////////////////////////////////////////////
   /// @brief a method to iterate over all elements in the index in
@@ -166,9 +166,9 @@ class PrimaryIndex final : public Index {
   ///        DEPRECATED
   //////////////////////////////////////////////////////////////////////////////
 
-  IndexElement* lookupSequential(arangodb::Transaction*,
-                                 arangodb::basics::BucketPosition& position,
-                                 uint64_t& total);
+  SimpleIndexElement lookupSequential(arangodb::Transaction*,
+                                      arangodb::basics::BucketPosition& position,
+                                      uint64_t& total);
 
   //////////////////////////////////////////////////////////////////////////////
   /// @brief request an iterator over all elements in the index in
@@ -193,7 +193,7 @@ class PrimaryIndex final : public Index {
   ///        DEPRECATED
   //////////////////////////////////////////////////////////////////////////////
 
-  IndexElement* lookupSequentialReverse(
+  SimpleIndexElement lookupSequentialReverse(
       arangodb::Transaction*, arangodb::basics::BucketPosition& position);
 
   int insertKey(arangodb::Transaction*, TRI_voc_rid_t revisionId, arangodb::velocypack::Slice const&);
@@ -202,20 +202,19 @@ class PrimaryIndex final : public Index {
 
   int resize(arangodb::Transaction*, size_t);
 
-  void invokeOnAllElements(std::function<bool(IndexElement*)>);
-  void invokeOnAllElementsForRemoval(std::function<bool(IndexElement*)>);
+  void invokeOnAllElements(std::function<bool(SimpleIndexElement const&)>);
+  void invokeOnAllElementsForRemoval(std::function<bool(SimpleIndexElement&)>);
 
   bool supportsFilterCondition(arangodb::aql::AstNode const*,
                                arangodb::aql::Variable const*, size_t, size_t&,
                                double&) const override;
 
   IndexIterator* iteratorForCondition(arangodb::Transaction*,
-                                      IndexIteratorContext*,
                                       arangodb::aql::AstNode const*,
                                       arangodb::aql::Variable const*,
                                       bool) const override;
 
-  IndexIterator* iteratorForSlice(arangodb::Transaction*, IndexIteratorContext*,
+  IndexIterator* iteratorForSlice(arangodb::Transaction*, 
                                   arangodb::velocypack::Slice const,
                                   bool) const override;
 
@@ -229,14 +228,14 @@ class PrimaryIndex final : public Index {
   ///        of type string.
   //////////////////////////////////////////////////////////////////////////////
 
-  IndexElement* lookup(arangodb::Transaction*, VPackSlice const&) const;
+  SimpleIndexElement lookup(arangodb::Transaction*, VPackSlice const&) const;
 
   //////////////////////////////////////////////////////////////////////////////
   /// @brief create the iterator, for a single attribute, IN operator
   //////////////////////////////////////////////////////////////////////////////
 
   IndexIterator* createInIterator(
-      arangodb::Transaction*, IndexIteratorContext*,
+      arangodb::Transaction*, 
       arangodb::aql::AstNode const*,
       arangodb::aql::AstNode const*) const;
 
@@ -245,7 +244,7 @@ class PrimaryIndex final : public Index {
   //////////////////////////////////////////////////////////////////////////////
   
   IndexIterator* createEqIterator(
-      arangodb::Transaction*, IndexIteratorContext*,
+      arangodb::Transaction*, 
       arangodb::aql::AstNode const*,
       arangodb::aql::AstNode const*) const;
 
@@ -253,12 +252,12 @@ class PrimaryIndex final : public Index {
   /// @brief add a single value node to the iterator's keys
   ////////////////////////////////////////////////////////////////////////////////
    
-  void handleValNode(IndexIteratorContext* context,
+  void handleValNode(arangodb::Transaction* trx,
                      VPackBuilder* keys,
                      arangodb::aql::AstNode const* valNode,
                      bool isId) const; 
 
-  IndexElement* buildKeyElement(TRI_voc_rid_t revisionId, uint8_t const*) const;
+  SimpleIndexElement buildKeyElement(TRI_voc_rid_t revisionId, arangodb::velocypack::Slice const&) const;
 
  private:
   /// @brief the actual index

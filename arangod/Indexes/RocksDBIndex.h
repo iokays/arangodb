@@ -80,7 +80,7 @@ class RocksDBIterator final : public IndexIterator {
   /// @brief Get the next element in the index
   ////////////////////////////////////////////////////////////////////////////////
 
-  IndexElement* next() override;
+  IndexLookupResult next() override;
 
   ////////////////////////////////////////////////////////////////////////////////
   /// @brief Reset the cursor
@@ -185,7 +185,6 @@ class RocksDBIndex final : public PathBasedIndex {
                              double&, size_t&) const override;
 
   IndexIterator* iteratorForCondition(arangodb::Transaction*,
-                                      IndexIteratorContext*,
                                       arangodb::aql::AstNode const*,
                                       arangodb::aql::Variable const*,
                                       bool) const override;

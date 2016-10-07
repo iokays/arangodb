@@ -98,9 +98,9 @@ class HashIndexIterator final : public IndexIterator {
   
   char const* typeName() const override { return "hash-index-iterator"; }
 
-  IndexElement* next() override;
+  IndexLookupResult next() override;
 
-  void nextBabies(std::vector<IndexElement*>&, size_t) override;
+  void nextBabies(std::vector<IndexLookupResult>&, size_t) override;
 
   void reset() override;
 
@@ -110,8 +110,6 @@ class HashIndexIterator final : public IndexIterator {
   std::vector<IndexElement*> _buffer;
   size_t _posInBuffer;
 };
-
-
 
 class HashIndexIteratorVPack final : public IndexIterator {
  public:
@@ -136,7 +134,7 @@ class HashIndexIteratorVPack final : public IndexIterator {
   
   char const* typeName() const override { return "hash-index-iterator-vpack"; }
 
-  IndexElement* next() override;
+  IndexLookupResult next() override;
 
   void reset() override;
 
@@ -199,7 +197,6 @@ class HashIndex final : public PathBasedIndex {
                                double&) const override;
 
   IndexIterator* iteratorForCondition(arangodb::Transaction*,
-                                      IndexIteratorContext*,
                                       arangodb::aql::AstNode const*,
                                       arangodb::aql::Variable const*,
                                       bool) const override;
@@ -212,7 +209,7 @@ class HashIndex final : public PathBasedIndex {
 ///        2) {"in": <compareValues>} // The value in index os one of them
 ////////////////////////////////////////////////////////////////////////////////
 
-  IndexIterator* iteratorForSlice(arangodb::Transaction*, IndexIteratorContext*,
+  IndexIterator* iteratorForSlice(arangodb::Transaction*, 
                                   arangodb::velocypack::Slice const,
                                   bool) const override;
 

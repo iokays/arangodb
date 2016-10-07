@@ -31,19 +31,19 @@
 using namespace arangodb;
 using namespace arangodb::wal;
   
-DocumentOperation::DocumentOperation(arangodb::Transaction* trx, 
-                                     LogicalCollection* collection,
+DocumentOperation::DocumentOperation(LogicalCollection* collection,
                                      TRI_voc_document_operation_e type)
-      : _trx(trx),
-        _collection(collection),
+      : _collection(collection),
         _tick(0),
         _type(type),
         _status(StatusType::CREATED) {
 }
 
 DocumentOperation::~DocumentOperation() {
-  try {
-    if (_status == StatusType::HANDLED) {
+  TRI_ASSERT(_status != StatusType::INDEXED);
+ 
+  if (_status == StatusType::HANDLED) {
+    try {
       if (_type == TRI_VOC_DOCUMENT_OPERATION_UPDATE ||
           _type == TRI_VOC_DOCUMENT_OPERATION_REPLACE) {
         // remove old, now unused revision
@@ -56,17 +56,15 @@ DocumentOperation::~DocumentOperation() {
         TRI_ASSERT(_newRevision.empty());
         _collection->removeRevision(_oldRevision._revisionId, true);
       }
-    } else if (_status != StatusType::REVERTED) {
-      revert();
+    } catch (...) {
+      // never throw here because of destructor
     }
-  } catch (...) {
-    // we're in the dtor here and must never throw
-  }
+  } 
 }
   
 DocumentOperation* DocumentOperation::swap() {
   DocumentOperation* copy =
-      new DocumentOperation(_trx, _collection, _type);
+      new DocumentOperation(_collection, _type);
   copy->_tick = _tick;
   copy->_oldRevision = _oldRevision;
   copy->_newRevision = _newRevision;
@@ -109,15 +107,20 @@ void DocumentOperation::setRevisions(DocumentDescriptor const& oldRevision,
   }
 }
 
-void DocumentOperation::revert() {
+void DocumentOperation::revert(arangodb::Transaction* trx) {
+  TRI_ASSERT(trx != nullptr);
+
   if (_status == StatusType::CREATED || 
       _status == StatusType::SWAPPED ||
       _status == StatusType::REVERTED) {
     return;
   }
-
+  
   TRI_ASSERT(_status == StatusType::INDEXED || _status == StatusType::HANDLED);
-   
+  
+  // set to reverted now
+  _status = StatusType::REVERTED;
+
   TRI_voc_rid_t oldRevisionId = 0;
   VPackSlice oldDoc;
   if (_type != TRI_VOC_DOCUMENT_OPERATION_INSERT) {
@@ -133,26 +136,40 @@ void DocumentOperation::revert() {
     newRevisionId = _newRevision._revisionId;
     newDoc = VPackSlice(_newRevision._vpack);
   }
-  _collection->rollbackOperation(_trx, _type, oldRevisionId, oldDoc, newRevisionId, newDoc);
+
+  try {
+    _collection->rollbackOperation(trx, _type, oldRevisionId, oldDoc, newRevisionId, newDoc);
+  } catch (...) {
+    // TODO: decide whether we should rethrow here
+  }
 
   if (_type == TRI_VOC_DOCUMENT_OPERATION_INSERT) {
     TRI_ASSERT(_oldRevision.empty());
     TRI_ASSERT(!_newRevision.empty());
     // remove now obsolete new revision
-    _collection->removeRevision(newRevisionId, true);
+    try {
+      _collection->removeRevision(newRevisionId, true);
+    } catch (...) {
+      // operation probably was never inserted
+      // TODO: decide whether we should rethrow here
+    }
   } else if (_type == TRI_VOC_DOCUMENT_OPERATION_UPDATE ||
              _type == TRI_VOC_DOCUMENT_OPERATION_REPLACE) {
     TRI_ASSERT(!_oldRevision.empty());
     TRI_ASSERT(!_newRevision.empty());
-    IndexElement* element = _collection->primaryIndex()->lookupKey(_trx, Transaction::extractKeyFromDocument(newDoc));
-    if (element != nullptr) {
-      element->updateRevisionId(oldRevisionId);
+    SimpleIndexElement* element = _collection->primaryIndex()->lookupKeyRef(trx, Transaction::extractKeyFromDocument(newDoc));
+    if (element != nullptr && element->revisionId() != 0) {
+      VPackSlice keySlice(Transaction::extractKeyFromDocument(oldDoc));
+      element->updateRevisionId(oldRevisionId, static_cast<uint32_t>(keySlice.begin() - oldDoc.begin()));
     }
     
     // remove now obsolete new revision
-    _collection->removeRevision(newRevisionId, true);
+    try {
+      _collection->removeRevision(newRevisionId, true);
+    } catch (...) {
+      // operation probably was never inserted
+      // TODO: decide whether we should rethrow here
+    }
   }
-
-  _status = StatusType::REVERTED;
 }
 

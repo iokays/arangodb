@@ -42,8 +42,7 @@ struct DocumentOperation {
     REVERTED
   };
   
-  DocumentOperation(arangodb::Transaction* trx, 
-                    LogicalCollection* collection,
+  DocumentOperation(LogicalCollection* collection,
                     TRI_voc_document_operation_e type);
 
   ~DocumentOperation();
@@ -73,11 +72,14 @@ struct DocumentOperation {
 
     _status = StatusType::HANDLED;
   }
+  
+  void done() noexcept {
+    _status = StatusType::SWAPPED;
+  }
 
-  void revert();
+  void revert(arangodb::Transaction*);
 
  private:
-  arangodb::Transaction* _trx;
   LogicalCollection* _collection;
   DocumentDescriptor _oldRevision;
   DocumentDescriptor _newRevision;

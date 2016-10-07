@@ -32,7 +32,6 @@
 #include <velocypack/Buffer.h>
 
 struct TRI_df_marker_t;
-struct IndexElement;
 
 namespace arangodb {
 namespace velocypack {
@@ -55,12 +54,14 @@ class DatafileStatisticsContainer;
 class Ditches;
 class FollowerInfo;
 class Index;
+struct IndexElement;
 class KeyGenerator;
 class ManagedDocumentResult;
 class ManagedMultiDocumentResult;
 struct OperationOptions;
 class PhysicalCollection;
 class PrimaryIndex;
+class SimpleIndexElement;
 class StringRef;
 class Transaction;
 
@@ -182,15 +183,7 @@ class LogicalCollection {
   TRI_voc_tick_t maxTick() const { return _maxTick; }
   void maxTick(TRI_voc_tick_t value) { _maxTick = value; }
 
-  uint64_t numberDocuments() const { return _numberDocuments; }
-
-  // TODO: REMOVE THESE OR MAKE PRIVATE
-  void incNumberDocuments() { ++_numberDocuments; }
-
-  void decNumberDocuments() { 
-    TRI_ASSERT(_numberDocuments > 0); 
-    --_numberDocuments; 
-  }
+  uint64_t numberDocuments() const;
 
   // TODO this should be part of physical collection!
   size_t journalSize() const;
@@ -413,12 +406,11 @@ class LogicalCollection {
 
   // SECTION: Index access (local only)
   int lookupDocument(arangodb::Transaction*, VPackSlice const,
-                     ManagedDocumentResult& result,
-                     IndexElement*& element);
+                     ManagedDocumentResult& result);
 
   int checkRevision(arangodb::Transaction*, TRI_voc_rid_t expected, TRI_voc_rid_t found);
 
-  int updateDocument(arangodb::Transaction*, IndexElement* element, 
+  int updateDocument(arangodb::Transaction*, 
                      TRI_voc_rid_t oldRevisionId, arangodb::velocypack::Slice const& oldDoc,
                      TRI_voc_rid_t newRevisionId, arangodb::velocypack::Slice const& newDoc,
                      arangodb::wal::DocumentOperation&, arangodb::wal::Marker const*,
@@ -562,8 +554,6 @@ class LogicalCollection {
 
   // whether or not secondary indexes should be filled
   bool _useSecondaryIndexes;
-
-  uint64_t _numberDocuments;
 
   TRI_voc_tick_t _maxTick;
 

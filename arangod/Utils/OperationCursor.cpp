@@ -80,12 +80,12 @@ void OperationCursor::getMore(std::shared_ptr<OperationResult>& opRes,
   builder.clear();
   try {
     VPackArrayBuilder guard(&builder);
-    IndexElement* element = nullptr;
+    IndexLookupResult element;
     // TODO: Improve this for baby awareness
-    while (batchSize > 0 && _limit > 0 && (element = _indexIterator->next()) != nullptr) {
+    while (batchSize > 0 && _limit > 0 && (element = _indexIterator->next())) {
       --batchSize;
       --_limit;
-      TRI_voc_rid_t revisionId = element->revisionId();
+      TRI_voc_rid_t revisionId = element.revisionId();
       if (collection->readRevision(trx, mmdr, revisionId)) {
         uint8_t const* vpack = mmdr.back(); 
         if (useExternals) {
@@ -112,8 +112,8 @@ void OperationCursor::getMore(std::shared_ptr<OperationResult>& opRes,
 ///        NOTE: This will throw on OUT_OF_MEMORY
 //////////////////////////////////////////////////////////////////////////////
 
-std::vector<IndexElement*> OperationCursor::getMoreMptr(uint64_t batchSize) {
-  std::vector<IndexElement*> res;
+std::vector<IndexLookupResult> OperationCursor::getMoreMptr(uint64_t batchSize) {
+  std::vector<IndexLookupResult> res;
   getMoreMptr(res, batchSize);
   return res;
 }
@@ -127,7 +127,7 @@ std::vector<IndexElement*> OperationCursor::getMoreMptr(uint64_t batchSize) {
 ///              The caller shall NOT modify it.
 //////////////////////////////////////////////////////////////////////////////
 
-void OperationCursor::getMoreMptr(std::vector<IndexElement*>& result,
+void OperationCursor::getMoreMptr(std::vector<IndexLookupResult>& result,
                                   uint64_t batchSize) {
   if (!hasMore()) {
     TRI_ASSERT(false);

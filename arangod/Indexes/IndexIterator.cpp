@@ -29,64 +29,6 @@
 using namespace arangodb;
 
 ////////////////////////////////////////////////////////////////////////////////
-/// @brief context for an index iterator
-////////////////////////////////////////////////////////////////////////////////
-
-IndexIteratorContext::IndexIteratorContext(TRI_vocbase_t* vocbase,
-                                           CollectionNameResolver const* resolver,
-                                           ServerState::RoleEnum serverRole)
-    : vocbase(vocbase), resolver(resolver), serverRole(serverRole), ownsResolver(resolver == nullptr) {}
-
-/*
-IndexIteratorContext::IndexIteratorContext(TRI_vocbase_t* vocbase)
-    : IndexIteratorContext(vocbase, nullptr) {}
-*/
-IndexIteratorContext::~IndexIteratorContext() {
-  if (ownsResolver) {
-    delete resolver;
-  }
-}
-
-CollectionNameResolver const* IndexIteratorContext::getResolver() const {
-  if (resolver == nullptr) {
-    TRI_ASSERT(ownsResolver);
-    resolver = new CollectionNameResolver(vocbase);
-  }
-  return resolver;
-}
-
-bool IndexIteratorContext::isCluster() const {
-  return arangodb::ServerState::instance()->isRunningInCluster(serverRole);
-}
-
-int IndexIteratorContext::resolveId(char const* handle, size_t length,
-                                    TRI_voc_cid_t& cid,
-                                    char const*& key,
-                                    size_t& outLength) const {
-  char const* p = static_cast<char const*>(memchr(handle, TRI_DOCUMENT_HANDLE_SEPARATOR_CHR, length));
-
-  if (p == nullptr || *p == '\0') {
-    return TRI_ERROR_ARANGO_DOCUMENT_HANDLE_BAD;
-  }
-
-  if (*handle >= '0' && *handle <= '9') {
-    cid = arangodb::basics::StringUtils::uint64(handle, p - handle);
-  } else {
-    std::string const name(handle, p - handle);
-    cid = getResolver()->getCollectionIdCluster(name);
-  }
-
-  if (cid == 0) {
-    return TRI_ERROR_ARANGO_COLLECTION_NOT_FOUND;
-  }
-
-  key = p + 1;
-  outLength = length - (key - handle);
-
-  return TRI_ERROR_NO_ERROR;
-}
-
-////////////////////////////////////////////////////////////////////////////////
 /// @brief default destructor. Does not free anything
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -96,22 +38,22 @@ IndexIterator::~IndexIterator() {}
 /// @brief default implementation for next
 ////////////////////////////////////////////////////////////////////////////////
 
-IndexElement* IndexIterator::next() { return nullptr; }
+IndexLookupResult IndexIterator::next() { return IndexLookupResult(); }
 
 ////////////////////////////////////////////////////////////////////////////////
 /// @brief default implementation for nextBabies
 ////////////////////////////////////////////////////////////////////////////////
 
-void IndexIterator::nextBabies(std::vector<IndexElement*>& result, size_t batchSize) {
+void IndexIterator::nextBabies(std::vector<IndexLookupResult>& result, size_t batchSize) {
   result.clear();
 
   if (batchSize > 0) {
     while (true) {
-      IndexElement* mptr = next();
-      if (mptr == nullptr) {
+      IndexLookupResult element = next();
+      if (!element) {
         return;
       }
-      result.emplace_back(mptr);
+      result.emplace_back(element);
       batchSize--;
       if (batchSize == 0) {
         return;
@@ -133,7 +75,7 @@ void IndexIterator::reset() {}
 void IndexIterator::skip(uint64_t count, uint64_t& skipped) {
   // Skip the first count-many entries
   // TODO: Can be improved
-  while (count > 0 && next() != nullptr) {
+  while (count > 0 && next()) {
     --count;
     skipped++;
   }
@@ -145,16 +87,16 @@ void IndexIterator::skip(uint64_t count, uint64_t& skipped) {
 ///        A nullptr indicates that all iterators are exhausted
 ////////////////////////////////////////////////////////////////////////////////
 
-IndexElement* MultiIndexIterator::next() {
+IndexLookupResult MultiIndexIterator::next() {
   if (_current == nullptr) {
-    return nullptr;
+    return IndexLookupResult();
   }
-  IndexElement* next = _current->next();
-  while (next == nullptr) {
+  IndexLookupResult next = _current->next();
+  while (!next) {
     _currentIdx++;
     if (_currentIdx >= _iterators.size()) {
       _current = nullptr;
-      return nullptr;
+      return IndexLookupResult();
     }
     _current = _iterators.at(_currentIdx);
     next = _current->next();
@@ -168,7 +110,7 @@ IndexElement* MultiIndexIterator::next() {
 ///        An empty result vector indicates that all iterators are exhausted
 ////////////////////////////////////////////////////////////////////////////////
 
-void MultiIndexIterator::nextBabies(std::vector<IndexElement*>& result, size_t limit) {
+void MultiIndexIterator::nextBabies(std::vector<IndexLookupResult>& result, size_t limit) {
   result.clear();
 
   if (_current == nullptr) {

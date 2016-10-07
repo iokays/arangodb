@@ -27,6 +27,7 @@
 #include "Basics/StaticStrings.h"
 #include "Basics/hashes.h"
 #include "Basics/tri-strings.h"
+#include "Indexes/IndexLookupContext.h"
 #include "Indexes/SimpleAttributeEqualityMatcher.h"
 #include "Utils/Transaction.h"
 #include "Utils/TransactionContext.h"
@@ -40,8 +41,6 @@
 
 using namespace arangodb;
 
-static constexpr uint64_t hashSeed = 0x87654321;
-
 /// @brief hard-coded vector of the index attributes
 /// note that the attribute names must be hard-coded here to avoid an init-order
 /// fiasco with StaticStrings::FromString etc.
@@ -50,39 +49,46 @@ static std::vector<std::vector<arangodb::basics::AttributeName>> const IndexAttr
      {arangodb::basics::AttributeName("_key", false)}};
 
 static inline uint64_t HashKey(void*, uint8_t const* key) {
-  // can use fast hash-function here, as index values are restricted to strings
-  return VPackSlice(key).hashString(hashSeed);
+  return SimpleIndexElement::hash(VPackSlice(key));
 }
 
-static inline uint64_t HashElement(void*, IndexElement const* element) {
-  return element->hashString(hashSeed);
+static inline uint64_t HashElement(void*, SimpleIndexElement const& element) {
+  return element.hash();
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 /// @brief determines if a key corresponds to an element
 ////////////////////////////////////////////////////////////////////////////////
 
-static bool IsEqualKeyElement(void*, uint8_t const* key,
+static bool IsEqualKeyElement(void* userData, uint8_t const* key,
                               uint64_t hash,
-                              IndexElement const* element) {
-  if (hash != element->hashString(hashSeed)) {
+                              SimpleIndexElement const& right) {
+  IndexLookupContext* context = static_cast<IndexLookupContext*>(userData);
+  TRI_ASSERT(context != nullptr);
+  
+  try {
+    VPackSlice tmp = right.slice(context);
+    TRI_ASSERT(tmp.isString());
+    return VPackSlice(key).equals(tmp);
+  } catch (...) {
     return false;
   }
-
-  return element->slice().equals(VPackSlice(key)); 
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 /// @brief determines if two elements are equal
 ////////////////////////////////////////////////////////////////////////////////
 
-static bool IsEqualElementElement(void*, IndexElement const* left,
-                                  IndexElement const* right) {
-  if (left->hashString(hashSeed) != right->hashString(hashSeed)) {
-    return false;
-  }
-
-  return left->slice().equals(right->slice());
+static bool IsEqualElementElement(void* userData, SimpleIndexElement const& left,
+                                  SimpleIndexElement const& right) {
+  IndexLookupContext* context = static_cast<IndexLookupContext*>(userData);
+  TRI_ASSERT(context != nullptr);
+  
+  VPackSlice l = left.slice(context);
+  VPackSlice r = right.slice(context);
+  TRI_ASSERT(l.isString());
+  TRI_ASSERT(r.isString());
+  return l.equals(r);
 }
 
 PrimaryIndexIterator::~PrimaryIndexIterator() {
@@ -92,40 +98,47 @@ PrimaryIndexIterator::~PrimaryIndexIterator() {
   }
 }
 
-IndexElement* PrimaryIndexIterator::next() {
+IndexLookupResult PrimaryIndexIterator::next() {
   while (_iterator.valid()) {
-    auto result = _index->lookupKey(_trx, _iterator.value());
+    SimpleIndexElement result = _index->lookupKey(_trx, _iterator.value());
     _iterator.next();
 
-    if (result != nullptr) {
+    if (result) {
       // found a result
-      return result;
+      return IndexLookupResult(result.revisionId());
     }
 
     // found no result. now go to next lookup value in _keys
   }
 
-  return nullptr;
+  return IndexLookupResult();
 }
 
 void PrimaryIndexIterator::reset() { _iterator.reset(); }
 
-IndexElement* AllIndexIterator::next() {
+IndexLookupResult AllIndexIterator::next() {
+  IndexLookupContext context(_trx, _collection); 
+  SimpleIndexElement element;
   if (_reverse) {
-    return _index->findSequentialReverse(_trx, _position);
+    element = _index->findSequentialReverse(&context, _position);
+  } else {
+    element = _index->findSequential(&context, _position, _total);
   }
-  return _index->findSequential(_trx, _position, _total);
-};
+  if (element) {
+    return IndexLookupResult(element.revisionId());
+  }
+  return IndexLookupResult();
+}
 
-void AllIndexIterator::nextBabies(std::vector<IndexElement*>& buffer, size_t limit) {
+void AllIndexIterator::nextBabies(std::vector<IndexLookupResult>& buffer, size_t limit) {
   size_t atMost = limit;
 
   buffer.clear();
 
   while (atMost > 0) {
-    auto result = next();
+    IndexLookupResult result = next();
 
-    if (result == nullptr) {
+    if (!result) {
       return;
     }
 
@@ -136,8 +149,13 @@ void AllIndexIterator::nextBabies(std::vector<IndexElement*>& buffer, size_t lim
 
 void AllIndexIterator::reset() { _position.reset(); }
 
-IndexElement* AnyIndexIterator::next() {
-  return _index->findRandom(_trx, _initial, _position, _step, _total);
+IndexLookupResult AnyIndexIterator::next() {
+  IndexLookupContext context(_trx, _collection); 
+  SimpleIndexElement element = _index->findRandom(&context, _initial, _position, _step, _total);
+  if (element) {
+    return IndexLookupResult(element.revisionId());
+  }
+  return IndexLookupResult();
 }
 
 void AnyIndexIterator::reset() {
@@ -145,7 +163,6 @@ void AnyIndexIterator::reset() {
   _total = 0;
   _position = _initial;
 }
-
 
 PrimaryIndex::PrimaryIndex(arangodb::LogicalCollection* collection)
     : Index(0, collection,
@@ -167,15 +184,6 @@ PrimaryIndex::PrimaryIndex(arangodb::LogicalCollection* collection)
 }
 
 PrimaryIndex::~PrimaryIndex() { 
-  if (_primaryIndex != nullptr) {
-    auto cb = [this](IndexElement* element) -> bool { 
-      element->free(1);
-      return true; 
-    };
-
-    // must invoke the free callback on all index elements to prevent leaks :snake:
-    _primaryIndex->invokeOnAllElements(cb);
-  } 
   delete _primaryIndex; 
 }
 
@@ -226,31 +234,40 @@ int PrimaryIndex::remove(arangodb::Transaction*, TRI_voc_rid_t, VPackSlice const
 
 /// @brief unload the index data from memory
 int PrimaryIndex::unload() {
-  auto cb = [](IndexElement* element) {
-    element->free(1);
-    return true;
-  };
-
-  _primaryIndex->truncate(cb);
+  _primaryIndex->truncate([](SimpleIndexElement const&) { return true; });
 
   return TRI_ERROR_NO_ERROR;
 }
 
 /// @brief looks up an element given a key
-IndexElement* PrimaryIndex::lookup(arangodb::Transaction* trx,
-                                   VPackSlice const& slice) const {
+SimpleIndexElement PrimaryIndex::lookup(arangodb::Transaction* trx,
+                                        VPackSlice const& slice) const {
+  IndexLookupContext context(trx, _collection); 
   TRI_ASSERT(slice.isArray() && slice.length() == 1);
   VPackSlice tmp = slice.at(0);
   TRI_ASSERT(tmp.isObject() && tmp.hasKey(StaticStrings::IndexEq));
   tmp = tmp.get(StaticStrings::IndexEq);
-  return _primaryIndex->findByKey(trx, tmp.begin());
+  return _primaryIndex->findByKey(&context, tmp.begin());
 }
 
 /// @brief looks up an element given a key
-IndexElement* PrimaryIndex::lookupKey(arangodb::Transaction* trx,
-                                      VPackSlice const& key) const {
+SimpleIndexElement PrimaryIndex::lookupKey(arangodb::Transaction* trx,
+                                           VPackSlice const& key) const {
+  IndexLookupContext context(trx, _collection); 
   TRI_ASSERT(key.isString());
-  return _primaryIndex->findByKey(trx, key.begin());
+  return _primaryIndex->findByKey(&context, key.begin());
+}
+
+/// @brief looks up an element given a key
+SimpleIndexElement* PrimaryIndex::lookupKeyRef(arangodb::Transaction* trx,
+                                               VPackSlice const& key) const {
+  IndexLookupContext context(trx, _collection); 
+  TRI_ASSERT(key.isString());
+  SimpleIndexElement* element = _primaryIndex->findByKeyRef(&context, key.begin());
+  if (element != nullptr && element->revisionId() == 0) {
+    return nullptr;
+  }
+  return element;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -261,10 +278,11 @@ IndexElement* PrimaryIndex::lookupKey(arangodb::Transaction* trx,
 ///        DEPRECATED
 ////////////////////////////////////////////////////////////////////////////////
 
-IndexElement* PrimaryIndex::lookupSequential(
+SimpleIndexElement PrimaryIndex::lookupSequential(
     arangodb::Transaction* trx, arangodb::basics::BucketPosition& position,
     uint64_t& total) {
-  return _primaryIndex->findSequential(trx, position, total);
+  IndexLookupContext context(trx, _collection); 
+  return _primaryIndex->findSequential(&context, position, total);
 }
 
 //////////////////////////////////////////////////////////////////////////////
@@ -295,9 +313,10 @@ IndexIterator* PrimaryIndex::anyIterator(arangodb::Transaction* trx) const {
 ///        DEPRECATED
 ////////////////////////////////////////////////////////////////////////////////
 
-IndexElement* PrimaryIndex::lookupSequentialReverse(
+SimpleIndexElement PrimaryIndex::lookupSequentialReverse(
     arangodb::Transaction* trx, arangodb::basics::BucketPosition& position) {
-  return _primaryIndex->findSequentialReverse(trx, position);
+  IndexLookupContext context(trx, _collection); 
+  return _primaryIndex->findSequentialReverse(&context, position);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -306,19 +325,10 @@ IndexElement* PrimaryIndex::lookupSequentialReverse(
 ////////////////////////////////////////////////////////////////////////////////
 
 int PrimaryIndex::insertKey(arangodb::Transaction* trx, TRI_voc_rid_t revisionId, VPackSlice const& doc) {
-  IndexElementGuard element(buildKeyElement(revisionId, doc.begin()), 1);
-  if (element == nullptr) {
-    return TRI_ERROR_OUT_OF_MEMORY;
-  }
-
-  int res = _primaryIndex->insert(trx, element.get());
+  IndexLookupContext context(trx, _collection); 
+  SimpleIndexElement element(buildKeyElement(revisionId, doc));
   
-  if (res == TRI_ERROR_NO_ERROR) {
-    // ownership transfer
-    element.release();
-  }
-
-  return res;
+  return _primaryIndex->insert(&context, element);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -327,16 +337,12 @@ int PrimaryIndex::insertKey(arangodb::Transaction* trx, TRI_voc_rid_t revisionId
 
 int PrimaryIndex::removeKey(arangodb::Transaction* trx,
                             TRI_voc_rid_t revisionId, VPackSlice const& doc) {
-  IndexElementGuard element(buildKeyElement(revisionId, doc.begin()), 1);
-  if (element == nullptr) {
-    return TRI_ERROR_OUT_OF_MEMORY;
-  }
-
-  uint8_t const* key = element.get()->slice().begin();
+  IndexLookupContext context(trx, _collection); 
   
-  IndexElementGuard found(_primaryIndex->removeByKey(trx, key), 1);
+  VPackSlice keySlice(Transaction::extractKeyFromDocument(doc));
+  SimpleIndexElement found = _primaryIndex->removeByKey(&context, keySlice.begin());
 
-  if (found == nullptr) {
+  if (!found) {
     return TRI_ERROR_ARANGO_DOCUMENT_NOT_FOUND;
   }
     
@@ -348,16 +354,17 @@ int PrimaryIndex::removeKey(arangodb::Transaction* trx,
 ////////////////////////////////////////////////////////////////////////////////
 
 int PrimaryIndex::resize(arangodb::Transaction* trx, size_t targetSize) {
-  return _primaryIndex->resize(trx, targetSize);
+  IndexLookupContext context(trx, _collection); 
+  return _primaryIndex->resize(&context, targetSize);
 }
 
 void PrimaryIndex::invokeOnAllElements(
-    std::function<bool(IndexElement*)> work) {
+    std::function<bool(SimpleIndexElement const&)> work) {
   _primaryIndex->invokeOnAllElements(work);
 }
 
 void PrimaryIndex::invokeOnAllElementsForRemoval(
-    std::function<bool(IndexElement*)> work) {
+    std::function<bool(SimpleIndexElement&)> work) {
   _primaryIndex->invokeOnAllElementsForRemoval(work);
 }
 
@@ -380,7 +387,7 @@ bool PrimaryIndex::supportsFilterCondition(
 ////////////////////////////////////////////////////////////////////////////////
 
 IndexIterator* PrimaryIndex::iteratorForCondition(
-    arangodb::Transaction* trx, IndexIteratorContext* context,
+    arangodb::Transaction* trx, 
     arangodb::aql::AstNode const* node,
     arangodb::aql::Variable const* reference, bool reverse) const {
   TRI_ASSERT(node->type == aql::NODE_TYPE_OPERATOR_NARY_AND);
@@ -402,14 +409,14 @@ IndexIterator* PrimaryIndex::iteratorForCondition(
 
   if (comp->type == aql::NODE_TYPE_OPERATOR_BINARY_EQ) {
     // a.b == value
-    return createEqIterator(trx, context, attrNode, valNode);
+    return createEqIterator(trx, attrNode, valNode);
   } else if (comp->type == aql::NODE_TYPE_OPERATOR_BINARY_IN) {
     // a.b IN values
     if (!valNode->isArray()) {
       return nullptr;
     }
 
-    return createInIterator(trx, context, attrNode, valNode);
+    return createInIterator(trx, attrNode, valNode);
   }
 
   // operator type unsupported
@@ -421,7 +428,7 @@ IndexIterator* PrimaryIndex::iteratorForCondition(
 ////////////////////////////////////////////////////////////////////////////////
 
 IndexIterator* PrimaryIndex::iteratorForSlice(
-    arangodb::Transaction* trx, IndexIteratorContext* ctxt,
+    arangodb::Transaction* trx, 
     arangodb::velocypack::Slice const searchValues, bool) const {
   if (!searchValues.isArray()) {
     // Invalid searchValue
@@ -451,7 +458,7 @@ arangodb::aql::AstNode* PrimaryIndex::specializeCondition(
 ////////////////////////////////////////////////////////////////////////////////
 
 IndexIterator* PrimaryIndex::createInIterator(
-    arangodb::Transaction* trx, IndexIteratorContext* context,
+    arangodb::Transaction* trx, 
     arangodb::aql::AstNode const* attrNode,
     arangodb::aql::AstNode const* valNode) const {
   // _key or _id?
@@ -468,7 +475,7 @@ IndexIterator* PrimaryIndex::createInIterator(
 
   // only leave the valid elements
   for (size_t i = 0; i < n; ++i) {
-    handleValNode(context, keys.get(), valNode->getMemberUnchecked(i), isId);
+    handleValNode(trx, keys.get(), valNode->getMemberUnchecked(i), isId);
     TRI_IF_FAILURE("PrimaryIndex::iteratorValNodes") {
       THROW_ARANGO_EXCEPTION(TRI_ERROR_DEBUG);
     }
@@ -486,7 +493,7 @@ IndexIterator* PrimaryIndex::createInIterator(
 ////////////////////////////////////////////////////////////////////////////////
 
 IndexIterator* PrimaryIndex::createEqIterator(
-    arangodb::Transaction* trx, IndexIteratorContext* context,
+    arangodb::Transaction* trx, 
     arangodb::aql::AstNode const* attrNode,
     arangodb::aql::AstNode const* valNode) const {
   // _key or _id?
@@ -498,7 +505,7 @@ IndexIterator* PrimaryIndex::createEqIterator(
   keys->openArray();
 
   // handle the sole element
-  handleValNode(context, keys.get(), valNode, isId);
+  handleValNode(trx, keys.get(), valNode, isId);
 
   TRI_IF_FAILURE("PrimaryIndex::noIterator") {
     THROW_ARANGO_EXCEPTION(TRI_ERROR_DEBUG);
@@ -511,7 +518,7 @@ IndexIterator* PrimaryIndex::createEqIterator(
 /// @brief add a single value node to the iterator's keys
 ////////////////////////////////////////////////////////////////////////////////
    
-void PrimaryIndex::handleValNode(IndexIteratorContext* context,
+void PrimaryIndex::handleValNode(arangodb::Transaction* trx,
                                  VPackBuilder* keys,
                                  arangodb::aql::AstNode const* valNode,
                                  bool isId) const { 
@@ -525,7 +532,7 @@ void PrimaryIndex::handleValNode(IndexIteratorContext* context,
     TRI_voc_cid_t cid;
     char const* key;
     size_t outLength;
-    int res = context->resolveId(valNode->getStringValue(), valNode->getStringLength(), cid, key, outLength);
+    int res = trx->resolveId(valNode->getStringValue(), valNode->getStringLength(), cid, key, outLength);
 
     if (res != TRI_ERROR_NO_ERROR) {
       return;
@@ -534,13 +541,13 @@ void PrimaryIndex::handleValNode(IndexIteratorContext* context,
     TRI_ASSERT(cid != 0);
     TRI_ASSERT(key != nullptr);
 
-    if (!context->isCluster() && cid != _collection->cid()) {
+    if (!trx->isCluster() && cid != _collection->cid()) {
       // only continue lookup if the id value is syntactically correct and
       // refers to "our" collection, using local collection id
       return;
     }
 
-    if (context->isCluster() && cid != _collection->planId()) {
+    if (trx->isCluster() && cid != _collection->planId()) {
       // only continue lookup if the id value is syntactically correct and
       // refers to "our" collection, using cluster collection id
       return;
@@ -553,8 +560,9 @@ void PrimaryIndex::handleValNode(IndexIteratorContext* context,
   }
 }
 
-IndexElement* PrimaryIndex::buildKeyElement(TRI_voc_rid_t revisionId, uint8_t const* vpack) const {
-  TRI_ASSERT(vpack != nullptr);
-  TRI_ASSERT(VPackSlice(vpack).isObject());
-  return buildStringElement(revisionId, Transaction::extractKeyFromDocument(VPackSlice(vpack)));
+SimpleIndexElement PrimaryIndex::buildKeyElement(TRI_voc_rid_t revisionId, VPackSlice const& doc) const {
+  TRI_ASSERT(doc.isObject());
+  VPackSlice value(Transaction::extractKeyFromDocument(doc));
+  TRI_ASSERT(value.isString());
+  return SimpleIndexElement(revisionId, value, static_cast<uint32_t>(value.begin() - doc.begin()));
 }

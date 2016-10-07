@@ -140,13 +140,13 @@ void RocksDBIterator::reset() {
 /// @brief Get the next element in the index
 ////////////////////////////////////////////////////////////////////////////////
 
-IndexElement* RocksDBIterator::next() {
+IndexLookupResult RocksDBIterator::next() {
   auto comparator = RocksDBFeature::instance()->comparator();
     
   while (true) {
     if (!_cursor->Valid()) {
       // We are exhausted already, sorry
-      return nullptr;
+      return IndexLookupResult();
     }
   
     rocksdb::Slice key = _cursor->key();
@@ -157,7 +157,7 @@ IndexElement* RocksDBIterator::next() {
 
     if (res < 0) {
       if (_reverse) {
-        return nullptr;
+        return IndexLookupResult();
       } else {
         _cursor->Next();
       }
@@ -167,7 +167,7 @@ IndexElement* RocksDBIterator::next() {
     res = comparator->Compare(key, rocksdb::Slice(_rightEndpoint->data(), _rightEndpoint->size()));
     // LOG(TRACE) << "comparing: " << VPackSlice(key.data() + RocksDBIndex::keyPrefixSize()).toJson() << " with " << VPackSlice((char const*) _rightEndpoint->data() + RocksDBIndex::keyPrefixSize()).toJson() << " - res: " << res;
    
-    IndexElement* doc = nullptr;
+    IndexLookupResult doc;
      
     if (res <= 0) {
       // get the value for _key, which is the last entry in the key array
@@ -180,7 +180,10 @@ IndexElement* RocksDBIterator::next() {
       // LOG(TRACE) << "looking up document with primary key: " << keySlice[n - 1].toJson();
 
       // use primary index to lookup the document
-      doc = _primaryIndex->lookupKey(_trx, keySlice[n - 1]);
+      SimpleIndexElement element = _primaryIndex->lookupKey(_trx, keySlice[n - 1]);
+      if (element) {
+        doc = IndexLookupResult(element.revisionId());
+      }
     }
     
     if (_reverse) {
@@ -191,13 +194,13 @@ IndexElement* RocksDBIterator::next() {
 
     if (res > 0) {
       if (!_probe) {
-        return nullptr;
+        return IndexLookupResult();
       }
       _probe = false;
       continue;
     }
 
-    if (doc != nullptr) {
+    if (doc) {
       return doc;
     }
   }
@@ -866,7 +869,7 @@ bool RocksDBIndex::supportsSortCondition(
 }
 
 IndexIterator* RocksDBIndex::iteratorForCondition(
-    arangodb::Transaction* trx, IndexIteratorContext* context,
+    arangodb::Transaction* trx, 
     arangodb::aql::AstNode const* node,
     arangodb::aql::Variable const* reference, bool reverse) const {
   VPackBuilder searchValues;

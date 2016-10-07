@@ -46,7 +46,7 @@ class SingleServerEdgeCursor : public EdgeCursor {
   std::vector<std::vector<OperationCursor*>> _cursors;
   size_t _currentCursor;
   size_t _currentSubCursor;
-  std::vector<IndexElement*> _cache;
+  std::vector<IndexLookupResult> _cache;
   size_t _cachePos;
 
  public:

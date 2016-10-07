@@ -34,7 +34,7 @@ namespace velocypack {
 class Slice;
 }
 
-}
+class IndexLookupContext;
 
 /// @brief velocypack sub-object (for indexes, as part of IndexElement, 
 /// if the last byte in data[] is 0, then the VelocyPack data is managed 
@@ -126,9 +126,6 @@ struct IndexElement {
   /// @brief get the revision id of the document
   inline TRI_voc_rid_t revisionId() const { return _revisionId; }
   
-  /// @brief set the revision id of the document
-  void updateRevisionId(TRI_voc_rid_t revisionId);
-  
   inline IndexElementValue const* subObject(size_t position) const {
     char const* p = reinterpret_cast<char const*>(this) + sizeof(TRI_voc_rid_t) + position * sizeof(IndexElementValue);
     return reinterpret_cast<IndexElementValue const*>(p);
@@ -171,6 +168,40 @@ struct IndexElement {
   TRI_voc_rid_t _revisionId;
 };
 
+struct SimpleIndexElement {
+ public:
+  constexpr SimpleIndexElement() : _revisionId(0), _hashAndOffset(0) {}
+  SimpleIndexElement(TRI_voc_rid_t revisionId, arangodb::velocypack::Slice const& value, uint32_t offset); 
+  SimpleIndexElement(SimpleIndexElement const& other) : _revisionId(other._revisionId), _hashAndOffset(other._hashAndOffset) {}
+  SimpleIndexElement& operator=(SimpleIndexElement const& other) {
+    _revisionId = other._revisionId;
+    _hashAndOffset = other._hashAndOffset;
+    return *this;
+  }
+
+  /// @brief get the revision id of the document
+  inline TRI_voc_rid_t revisionId() const { return _revisionId; }
+  inline uint64_t hash() const { return _hashAndOffset & 0xFFFFFFFFULL; }
+  inline uint32_t offset() const { return static_cast<uint32_t>((_hashAndOffset & 0xFFFFFFFF00000000ULL) >> 32); }
+  arangodb::velocypack::Slice slice(IndexLookupContext*) const;
+  
+  inline operator bool() const { return _revisionId != 0; }
+  inline bool operator==(SimpleIndexElement const& other) const {
+    return _revisionId == other._revisionId && _hashAndOffset == other._hashAndOffset;
+  }
+   
+  static uint64_t hash(arangodb::velocypack::Slice const& value);
+  inline void updateRevisionId(TRI_voc_rid_t revisionId, uint32_t offset) { 
+    _revisionId = revisionId; 
+    _hashAndOffset &= 0xFFFFFFFFULL; 
+    _hashAndOffset |= (static_cast<uint64_t>(offset) << 32);
+  }
+  
+ private:
+  TRI_voc_rid_t _revisionId;
+  uint64_t _hashAndOffset;
+};
+
 class IndexElementGuard {
  public:
   IndexElementGuard(IndexElement* element, size_t numSubs) : _element(element), _numSubs(numSubs) {}
@@ -197,5 +228,25 @@ class IndexElementGuard {
   IndexElement* _element;
   size_t const _numSubs;
 };
+
+class IndexLookupResult {
+ public:
+  constexpr IndexLookupResult() : _revisionId(0) {}
+  explicit IndexLookupResult(TRI_voc_rid_t revisionId) : _revisionId(revisionId) {}
+  IndexLookupResult(IndexLookupResult const& other) : _revisionId(other._revisionId) {}
+  IndexLookupResult& operator=(IndexLookupResult const& other) {
+    _revisionId = other._revisionId;
+    return *this;
+  }
+
+  inline operator bool() const { return _revisionId != 0; }
+
+  inline TRI_voc_rid_t revisionId() const { return _revisionId; }
+
+ private:
+  TRI_voc_rid_t _revisionId;
+};
+
+}
 
 #endif
