@@ -890,9 +890,11 @@ bool LogicalCollection::allowUserKeys() const {
   return _allowUserKeys;
 }
 
+#ifndef USE_ENTERPRISE
 bool LogicalCollection::usesDefaultShardKeys() const {
   return (_shardKeys.size() == 1 && _shardKeys[0] == StaticStrings::KeyString);
 }
+#endif
 
 std::vector<std::string> const& LogicalCollection::shardKeys() const {
   return _shardKeys;
@@ -3543,3 +3545,10 @@ void LogicalCollection::removeRevision(TRI_voc_rid_t revisionId, bool updateStat
   getPhysical()->removeRevision(revisionId, updateStats);
 }
 
+/// @brief a method to skip certain documents in AQL write operations,
+/// this is only used in the enterprise edition for smart graphs
+#ifndef USE_ENTERPRISE
+bool LogicalCollection::skipForAqlWrite(arangodb::velocypack::Slice document) const {
+  return false;
+}
+#endif
